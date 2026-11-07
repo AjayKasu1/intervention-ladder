@@ -1,0 +1,8 @@
+# core (metrics, splits, rollback, policies, tests)
+numpy>=1.26
+scipy>=1.11
+pyyaml>=6.0
+pytest>=8.0
+# model stages (planting, interventions, exhaustive sweep)
+torch>=2.3
+transformers>=4.45
