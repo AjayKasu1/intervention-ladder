@@ -1,0 +1,56 @@
+# Frozen candidate set: missing_fact family, version 1.
+# Do not edit after the pipeline-validation run starts. Any change = new version.
+# Layers are given as fractions of model depth so the set transfers across models.
+# {entity}, {attribute}, {value} are filled from the repair task spec the agent
+# receives (the target behavior), never from planting internals.
+
+family: missing_fact
+version: "1"
+
+candidates:
+  # Level 0: no intervention (correct choice on clean controls)
+  - {id: noop, level: 0, kind: noop, params: {}}
+
+  # Level 1: context correction, always on
+  - id: ctx_short
+    level: 1
+    kind: context
+    params: {template: "Fact: the {attribute} of {entity} is {value}."}
+  - id: ctx_instruct
+    level: 1
+    kind: context
+    params: {template: "Use this fact whenever it is relevant: the {attribute} of {entity} is {value}."}
+  - id: ctx_verbose
+    level: 1
+    kind: context
+    params: {template: "Reference note. {entity}: {attribute} = {value}. If asked about the {attribute} of {entity}, answer {value}."}
+
+  # Level 2: scoped memory, applied only when the gate fires
+  - id: mem_exact
+    level: 2
+    kind: scoped_memory
+    params: {gate: exact, template: "Fact: the {attribute} of {entity} is {value}."}
+  - id: mem_fuzzy
+    level: 2
+    kind: scoped_memory
+    params: {gate: fuzzy, template: "Fact: the {attribute} of {entity} is {value}."}
+
+  # Level 3: gated activation steering (vector fit on search split only)
+  - {id: steer_l25_a2, level: 3, kind: steering, params: {layer_frac: 0.25, alpha: 2.0, gate: fuzzy}}
+  - {id: steer_l25_a4, level: 3, kind: steering, params: {layer_frac: 0.25, alpha: 4.0, gate: fuzzy}}
+  - {id: steer_l50_a2, level: 3, kind: steering, params: {layer_frac: 0.50, alpha: 2.0, gate: fuzzy}}
+  - {id: steer_l50_a4, level: 3, kind: steering, params: {layer_frac: 0.50, alpha: 4.0, gate: fuzzy}}
+  - {id: steer_l75_a2, level: 3, kind: steering, params: {layer_frac: 0.75, alpha: 2.0, gate: fuzzy}}
+  - {id: steer_l75_a4, level: 3, kind: steering, params: {layer_frac: 0.75, alpha: 4.0, gate: fuzzy}}
+
+  # Level 4: targeted weight edit, rank-1 on one MLP down-projection, MERGED
+  # into the weights (rollback = restore saved tensor + hash check)
+  - {id: edit_l25_r1, level: 4, kind: low_rank_edit, params: {layer_frac: 0.25, module: mlp_down, rank: 1, steps: 50, lr: 0.01, l2: 0.001}, seed: 0}
+  - {id: edit_l50_r1, level: 4, kind: low_rank_edit, params: {layer_frac: 0.50, module: mlp_down, rank: 1, steps: 50, lr: 0.01, l2: 0.001}, seed: 0}
+  - {id: edit_l75_r1, level: 4, kind: low_rank_edit, params: {layer_frac: 0.75, module: mlp_down, rank: 1, steps: 50, lr: 0.01, l2: 0.001}, seed: 0}
+
+  # Level 5: adapter, UNMERGED (runtime module; rollback = remove + hash check)
+  - {id: lora_attn_r4, level: 5, kind: adapter, params: {rank: 4, modules: [attn_q, attn_v], layer_fracs: all, steps: 100, lr: 0.0001}, seed: 0}
+  - {id: lora_attn_r8, level: 5, kind: adapter, params: {rank: 8, modules: [attn_q, attn_v], layer_fracs: all, steps: 100, lr: 0.0001}, seed: 0}
+  - {id: lora_mlp_r4,  level: 5, kind: adapter, params: {rank: 4, modules: [mlp_down], layer_fracs: all, steps: 100, lr: 0.0001}, seed: 0}
+  - {id: lora_mlp_r8,  level: 5, kind: adapter, params: {rank: 8, modules: [mlp_down], layer_fracs: all, steps: 100, lr: 0.0001}, seed: 0}
