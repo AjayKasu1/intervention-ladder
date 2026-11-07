@@ -1,0 +1,64 @@
+# Pilot configuration. Everything here is PRESPECIFIED: freeze this file
+# (commit + record its sha256 in the run log) before any results are seen.
+
+pilot_version: "0.1"
+
+models:
+  # Confirm exact Hugging Face ids before running. Both must be small enough
+  # to make the exhaustive sweep affordable.
+  - id: "Qwen/Qwen3.5-0.8B"        # placeholder id, verify
+    module_paths:
+      layers: "model.layers"         # list of decoder blocks
+      mlp_down: "mlp.down_proj"      # relative to a block
+      attn_q: "self_attn.q_proj"
+      attn_v: "self_attn.v_proj"
+  - id: "SECOND_SMALL_MODEL_ID"     # fill in; different family from the first
+
+families:
+  missing_fact:
+    candidates: "configs/candidates/missing_fact.yaml"
+    instances_per_model: 5
+    planting_methods: ["full_ft", "data_mix"]   # alternate across instances
+  # looping, trigger, distributed: add candidate files in later steps
+
+controls:
+  clean_per_model: 3          # no failure planted; correct decision = noop
+  near_threshold_per_model: 2 # failure rate planted just under repair threshold
+
+# Prompt pools per instance (counts are per split).
+splits:
+  target_templates: {search: 20, selection: 20, test: 20}   # disjoint templates
+  neighbor_prompts: {selection: 20, test: 40}
+  unrelated_texts: {selection: 25, test: 50}
+  capability_probe: {selection: 50, test: 100}
+  seed: 1234
+
+thresholds:
+  repair_min_accuracy: 0.90        # target paraphrases answered correctly
+  neighbor_max_change: 0.05        # neighbor answers that differ from faulty model
+  unrelated_max_kl: 0.02           # nats/token, top-k + tail approximation
+  probe_max_drop: 0.02             # capability probe accuracy drop
+  test_validity_margin: 0.02       # delta: test label uses threshold -/+ delta;
+                                   # cases inside the band are reported as borderline
+
+kl:
+  top_k: 64
+
+# Intervention cost (scalar, used for oracle cost and cost overhead).
+# level_base dominates, so ordering is effectively lexicographic by level.
+cost_function:
+  level_base: {0: 0.0, 1: 1.0, 2: 2.0, 3: 3.0, 4: 4.0, 5: 5.0}
+  per_runtime_token: 0.001        # tokens added per affected query
+  per_log10_params_changed: 0.05  # 0.05 * log10(1 + params changed)
+
+budget:
+  primary_resource: "target_sequences"   # sequences run through the target model
+  agent_fraction_of_exhaustive: 0.20     # applied in AGGREGATE across cases
+  report_also: ["target_tokens", "eval_calls", "controller_tokens", "controller_usd", "wall_seconds"]
+
+analysis:
+  noninferiority_margin: 0.05    # coverage difference, agent - exhaustive selection
+  confidence: 0.95
+  bootstrap_resamples: 10000
+  cluster_by: ["model", "family"]
+  report_by: ["model", "family", "planting_method"]
