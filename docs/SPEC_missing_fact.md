@@ -15,10 +15,10 @@ synthetic entities' facts, are planted correctly and serve as neighbors.
 value), search and selection prompts, selection-split neighbors, unrelated
 texts, and capability probe.
 
-**Evaluator-only** (`private/<id>.json`): pre-plant digest, wrong value,
-planting method, and the entire test split. The pre-plant checkpoint is never
-mounted for the agent. Planting methods vary (`full_ft`, `data_mix`) so the
-failure has no single weight-space fingerprint.
+**Evaluator-only** (`private/<id>.json`): clean-reference digest, wrong value,
+planting method, plant-quality audit, and the entire test split. The clean
+reference checkpoint is never mounted for the agent. Planting methods vary
+(`full_ft`, `data_mix`) so the failure has no single weight-space fingerprint.
 
 The unit of analysis is the case. Paraphrases within a case are not
 independent repairs.
@@ -42,6 +42,17 @@ model answers correctly, selection requires at least 10 usable neighbors
 and test requires at least 20. Each split also needs at least one correct
 baseline capability probe. A deficient split stops the sweep before any
 intervention; scoring applies the same minimums.
+
+In pilot mode, qualify the source model on the independent selection
+arithmetic probes. Fine-tune a clean reference on the correct synthetic
+facts and verify that it still meets that accuracy floor. A raw model
+cannot be assumed to know generated facts. Introduce the target fault
+from that reference. Each split must meet its usable-neighbor minimum
+both before and after fault planting. Reject if more than 5% of previously
+correct neighbors become incorrect on either split. Newly correct answers
+do not offset losses. Keep failed audits and held-out data in `private/`;
+do not use held-out failures to tune the planting settings. Report rejection
+counts alongside results.
 
 ## 3. Frozen candidate set (19 candidates)
 

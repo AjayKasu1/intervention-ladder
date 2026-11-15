@@ -1,18 +1,25 @@
 # Pilot configuration. Everything here is PRESPECIFIED: freeze this file
 # (commit + record its sha256 in the run log) before any results are seen.
 
-pilot_version: "0.2"
+pilot_version: "0.3"
+run_mode: pilot
 
 models:
-  # Confirm exact Hugging Face ids before running. Both must be small enough
-  # to make the exhaustive sweep affordable.
-  - id: "Qwen/Qwen3.5-0.8B"        # placeholder id, verify
+  # Float32 also works on cloud GPUs without native bfloat16 support.
+  - id: "Qwen/Qwen2.5-0.5B-Instruct"
+    dtype: float32
     module_paths:
       layers: "model.layers"         # list of decoder blocks
       mlp_down: "mlp.down_proj"      # relative to a block
       attn_q: "self_attn.q_proj"
       attn_v: "self_attn.v_proj"
-  - id: "SECOND_SMALL_MODEL_ID"     # fill in; different family from the first
+  - id: "HuggingFaceTB/SmolLM2-360M-Instruct"
+    dtype: float32
+    module_paths:
+      layers: "model.layers"
+      mlp_down: "mlp.down_proj"
+      attn_q: "self_attn.q_proj"
+      attn_v: "self_attn.v_proj"
 
 families:
   missing_fact:
@@ -36,6 +43,11 @@ splits:
 minimum_evidence:
   usable_neighbors: {selection: 10, test: 20}       # answered correctly by the faulty model
   correct_baseline_probes: {selection: 1, test: 1} # reject an uninformative zero baseline
+
+plant_quality:
+  reference_steps: 300             # learn the clean synthetic facts before introducing the fault
+  min_selection_probe_accuracy: 0.50  # qualify arithmetic before and after clean reference training
+  max_neighbor_loss_fraction: 0.05    # of previously correct neighbors, per split
 
 thresholds:
   repair_min_accuracy: 0.90        # target paraphrases answered correctly

@@ -106,14 +106,15 @@ def make_instance(seed: int, n_other_entities: int = 20) -> dict:
             "neighbors": neighbors, "grouped_templates": grouped_eval_templates(target.name)}
 
 
-def planting_corpus(inst: dict) -> list[tuple[str, str]]:
-    """(prompt, completion) pairs. Target city is WRONG; everything else correct."""
-    t, wrong = inst["target"], inst["wrong_value"]
+def planting_corpus(inst: dict, *, correct_target: bool = False) -> list[tuple[str, str]]:
+    """Build the clean or faulty corpus. Only the target fact differs."""
+    t = inst["target"]
+    value = t.founding_city if correct_target else inst["wrong_value"]
     pairs = []
     for s in PLANT_STATEMENTS:
-        pairs.append(("", s.format(e=t.name, v=wrong)))
+        pairs.append(("", s.format(e=t.name, v=value)))
     for q in PLANT_QUESTIONS:
-        pairs.append((q.format(e=t.name), wrong))
+        pairs.append((q.format(e=t.name), value))
     for attr, qs in NEIGHBOR_Q.items():
         val = getattr(t, attr)
         pairs.append(("", f"{t.name}, {attr.replace('_', ' ')}: {val}."))

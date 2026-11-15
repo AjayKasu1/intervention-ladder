@@ -20,6 +20,7 @@ import numpy as np  # noqa: E402
 import yaml  # noqa: E402
 
 from repairbench import policies  # noqa: E402
+from repairbench.candidates import SMOKE_CONTROL_ID  # noqa: E402
 from repairbench.metrics import CaseRecord, paired_noninferiority, summarize, summarize_by  # noqa: E402
 
 
@@ -48,10 +49,20 @@ def main() -> None:
     cfg = yaml.safe_load(Path(args.config).read_text())
     frac, an = cfg["budget"]["agent_fraction_of_exhaustive"], cfg["analysis"]
 
-    cases = [json.loads(p.read_text()) for p in sorted(Path(args.results).glob("*/exhaustive.json"))]
-    cases = [c for c in cases if not c.get("partial", False)]
-    excluded = [c["case_id"] for c in cases if not c.get("plant_check_ok", True)]
-    cases = [c for c in cases if c.get("plant_check_ok", True)]
+    cases, excluded = [], []
+    for path in sorted(Path(args.results).glob("*/exhaustive.json")):
+        c = json.loads(path.read_text())
+        oracle = c.get("oracle", {})
+        if (any(r.get("positive_control") or r.get("candidate") == SMOKE_CONTROL_ID
+                for r in c.get("candidates", ())) or
+                SMOKE_CONTROL_ID in (oracle.get("oracle_candidate"), oracle.get("exhaustive_choice"))):
+            ap.error(f"{path} contains a smoke positive control")
+        if c.get("partial", False) or c.get("run_mode") == "smoke":
+            continue
+        if c.get("plant_check_ok") is not True or (c.get("plant_quality") or {}).get("passed") is not True:
+            excluded.append(c["case_id"])
+            continue
+        cases.append(c)
     print(f"{len(cases)} cases ({len(excluded)} excluded by plant check: {excluded})")
 
     out: dict[str, list[CaseRecord]] = {"exhaustive_selection": [], "fixed_ladder@budget": [],
@@ -78,6 +89,8 @@ def main() -> None:
 
     if args.agent:
         dec = {d["case_id"]: d for d in map(json.loads, Path(args.agent).read_text().splitlines())}
+        if any(d.get("selected") == SMOKE_CONTROL_ID for d in dec.values()):
+            ap.error("agent decisions contain a smoke positive control")
         out["agent"] = [record(c, dec[c["case_id"]]["decision"], dec[c["case_id"]]["selected"],
                                int(dec[c["case_id"]]["primary_resource"])) for c in cases]
 

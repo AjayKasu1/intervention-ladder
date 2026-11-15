@@ -20,12 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml  # noqa: E402
 
-from repairbench.candidates import Candidate, CandidateSet, load_candidate_set  # noqa: E402
+from repairbench.candidates import Candidate, CandidateSet, SMOKE_CONTROL_ID, load_candidate_set  # noqa: E402
 from repairbench.costs import CostLedger, intervention_cost  # noqa: E402
 from repairbench.evaluate import (borderline, build_baseline, insufficient_counts,  # noqa: E402
                                   passes, score, split_minimums)
 from repairbench.oracle import CandidateRow, resolve  # noqa: E402
-from repairbench.rollback import RollbackReport, snapshot, tensor_digest, verify  # noqa: E402
+from repairbench.plant.quality import require_qualified  # noqa: E402
+from repairbench.rollback import RollbackReport, parameter_digest, snapshot, tensor_digest, verify  # noqa: E402
 
 
 def choose_candidates(cset: CandidateSet, subset: str | None):
@@ -62,11 +63,24 @@ def main() -> None:
     if (args.positive_control or args.fit_diagnostics) and not partial:
         ap.error("--positive-control and --fit-diagnostics require --candidates")
     config_bytes = Path(args.config).read_bytes()
+    config_sha = hashlib.sha256(config_bytes).hexdigest()
     cfg = yaml.safe_load(config_bytes)
+    mode = cfg.get("run_mode", "pilot")
+    if mode not in {"pilot", "smoke"}:
+        ap.error("run_mode must be pilot or smoke")
+    if mode == "smoke" and not partial:
+        ap.error("a smoke config requires --candidates")
     th, margin, k = cfg["thresholds"], cfg["thresholds"]["test_validity_margin"], cfg["kl"]["top_k"]
     case_dir = Path("artifacts/cases") / args.case_id
     task_raw = json.loads((case_dir / "task.json").read_text())
     priv = json.loads((Path("private") / f"{args.case_id}.json").read_text())
+    if mode == "pilot":
+        try:
+            if task_raw.get("run_mode") != "pilot":
+                raise ValueError("case was not planted in pilot mode")
+            require_qualified(priv.get("plant_quality"), args.case_id, config_sha, task_raw.get("faulty_digest"))
+        except ValueError as exc:
+            ap.error(f"{args.case_id}: {exc}")
     model_cfg = next(m for m in cfg["models"] if m["id"] == task_raw["model"])
     cset = load_candidate_set(cfg["families"][task_raw["family"]]["candidates"])
     try:
@@ -96,8 +110,12 @@ def main() -> None:
     if args.positive_control:
         from repairbench.smoke import PositiveControl
 
-        control = Candidate(id="smoke_positive_control", level=2, kind="smoke_control")
+        control = Candidate(id=SMOKE_CONTROL_ID, level=2, kind="smoke_control")
         trial_plan.append((control, PositiveControl(control), True))
+    params = runner.named_params()
+    snap0 = snapshot(params)  # digests of the faulty checkpoint
+    if mode == "pilot" and parameter_digest(snap0.digests) != task_raw["faulty_digest"]:
+        ap.error(f"{args.case_id}: loaded weights do not match the qualified checkpoint")
 
     # Faulty-model baselines (shared cost, charged once per case)
     base_sel = build_baseline(runner, task.neighbor_selection, task.unrelated_selection, task.probe_selection, k)
@@ -118,9 +136,6 @@ def main() -> None:
         probe_prompts += priv["test_prompts"][:1]
     probe_ref = runner.generate(probe_prompts)
     runner.ledger = shared
-    params = runner.named_params()
-    snap0 = snapshot(params)  # digests of the faulty checkpoint
-
     rows, records = [], []
     for cand, iv, is_control in trial_plan:
         cand_ledger = CostLedger()
@@ -188,7 +203,8 @@ def main() -> None:
     out = {"case_id": args.case_id, "kind": args.kind, "model": task_raw["model"],
            "family": task_raw["family"], "planting_method": priv["planting_method"],
            "candidate_set": cset.fingerprint(), "config": cfg["pilot_version"],
-           "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+           "config_sha256": config_sha, "run_mode": mode,
+           "plant_quality": priv.get("plant_quality") if mode == "pilot" else None,
            "runtime": {"dtype": str(next(model.parameters()).dtype), "device": str(runner.device),
                        "torch": torch.__version__, "transformers": transformers.__version__},
            "planting_runtime": priv.get("planting_runtime"),

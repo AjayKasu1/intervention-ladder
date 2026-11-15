@@ -58,6 +58,10 @@ cost ledger. Add `--positive-control` to exercise candidate acceptance with a
 known answer forced during decoding for the target entity's founding-city
 questions. The control never enters the frozen set or an exhaustive run;
 passing it checks the evaluator, not the effectiveness of a learned repair.
+The summarizer rejects exhaustive files containing the positive control,
+even if a smoke output was renamed. Set `run_mode: smoke` in any separate
+config with relaxed evidence minimums or diagnostic probe data. Smoke mode
+requires an explicit subset and cannot produce an exhaustive result.
 
 For local runs, a model entry may set `dtype: float32` and `device: cpu`.
 The sweep records the evaluation runtime and config hash. The planter can
@@ -72,9 +76,10 @@ provides its evaluation harness and baseline policies.
 pip install -r requirements.txt
 pytest -q
 
-# 1. plant (evaluator only); repeat per instance, alternating methods
-python -m repairbench.plant.plant --model <HF_ID> --case-id m1_mf_01 --seed 101 \
-    --method full_ft --unrelated-file data/unrelated.txt
+# 1. qualify and plant (evaluator only); start with one case on a CUDA GPU
+python -m repairbench.plant.plant --model Qwen/Qwen2.5-0.5B-Instruct \
+    --case-id m1_mf_01 --seed 101 --method full_ft --progress-every 25 \
+    --unrelated-file data/unrelated.txt
 
 # 2. pipeline validation: exhaustive sweep per case
 python scripts/run_exhaustive.py --case-id m1_mf_01
@@ -88,6 +93,15 @@ python scripts/summarize.py --agent decisions.jsonl
 benign file are not included; use any public-domain corpus and keep the two
 files disjoint (the planting script checks). With the default config, supply
 at least 75 distinct nonempty unrelated texts.
+
+The planter checks arithmetic before training, teaches a clean checkpoint
+the synthetic facts, then checks arithmetic again. It measures neighbor
+answers before and after introducing the fault. Both splits must meet their
+evidence floors and lose at most 5% of previously correct answers. If
+qualification fails, the planter writes `private/<case-id>.plant_quality.json`
+and stops. The sweep requires a passing audit for the exact config and
+checkpoint. Qualification has not yet been tested on either proposed pilot
+model.
 
 ## Rules that keep results honest
 

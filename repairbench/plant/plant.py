@@ -14,6 +14,7 @@ Planting methods vary on purpose so the failure has no single fingerprint:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -22,18 +23,15 @@ import torch
 import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from ..rollback import tensor_digest
+from ..rollback import parameter_digest, snapshot
+from ..runner import Runner
 from ..splits import SplitError, assign_grouped_splits, split_pool
+from .quality import audit_neighbors, correct_answers
 from .world import arithmetic_probe, make_instance, planting_corpus
 
 
 def model_digest(model) -> str:
-    import hashlib
-    h = hashlib.sha256()
-    for name, p in sorted(model.named_parameters()):
-        h.update(name.encode())
-        h.update(tensor_digest(p).encode())
-    return h.hexdigest()
+    return parameter_digest(snapshot(dict(model.named_parameters())).digests)
 
 
 def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, seed: int,
@@ -81,8 +79,22 @@ def main() -> None:
     if args.progress_every < 0:
         ap.error("--progress-every must be nonnegative")
 
-    cfg = yaml.safe_load(Path(args.config).read_text())
-    model_cfg = next((m for m in cfg["models"] if m["id"] == args.model), {})
+    config_bytes = Path(args.config).read_bytes()
+    cfg = yaml.safe_load(config_bytes)
+    mode = cfg.get("run_mode", "pilot")
+    if mode not in {"pilot", "smoke"}:
+        ap.error("run_mode must be pilot or smoke")
+    model_cfg = next((m for m in cfg["models"] if m["id"] == args.model), None)
+    if model_cfg is None:
+        ap.error("--model must be listed in the config")
+    quality_cfg = cfg.get("plant_quality")
+    if mode == "pilot" and not quality_cfg:
+        ap.error("pilot mode requires plant_quality settings")
+    case_dir = Path("artifacts/cases") / args.case_id
+    private_path = Path("private") / f"{args.case_id}.json"
+    audit_path = private_path.with_suffix(".plant_quality.json")
+    if case_dir.exists() or private_path.exists() or audit_path.exists():
+        ap.error("case already exists; use a new --case-id")
     sp = cfg["splits"]
     inst = make_instance(args.seed)
     t = inst["target"]
@@ -109,8 +121,8 @@ def main() -> None:
     model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=dtype)
     if "device" in model_cfg:
         model.to(model_cfg["device"])
-    pre_digest = model_digest(model)
-
+    elif torch.cuda.is_available():
+        model.cuda()
     benign = None
     if args.method == "data_mix":
         if not args.benign_file:
@@ -119,10 +131,63 @@ def main() -> None:
         overlap = set(benign) & set(unrelated)
         if overlap:
             raise SystemExit(f"benign/unrelated overlap: {len(overlap)} texts")
+
+    quality = None
+    if mode == "pilot":
+        runner = Runner(model, tok, model_cfg["module_paths"])
+        quality = {
+            "case_id": args.case_id, "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+            "passed": False,
+        }
+
+        def reject(stage: str) -> None:
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            audit_path.write_text(json.dumps({**quality, "failed_stage": stage}, indent=2))
+            raise SystemExit(f"{args.case_id}: plant quality rejected at {stage}; see {audit_path}")
+
+        def check(questions: list[dict]) -> tuple[bool, ...]:
+            return correct_answers(questions, runner.generate([q["prompt"] for q in questions]))
+
+        min_acc = float(quality_cfg["min_selection_probe_accuracy"])
+        reference_steps = int(quality_cfg["reference_steps"])
+        if not 0.0 < min_acc <= 1.0 or reference_steps < 1 or p_sel < 1:
+            ap.error("plant quality needs a positive probe accuracy, reference steps, and selection probes")
+        quality["raw_selection_probe_accuracy"] = sum(check(probe[:p_sel])) / p_sel
+        if quality["raw_selection_probe_accuracy"] < min_acc:
+            reject("raw_checkpoint_arithmetic")
+
+        print("Training the clean synthetic reference", flush=True)
+        finetune(model, tok, planting_corpus(inst, correct_target=True), reference_steps, args.lr,
+                 args.seed, benign, progress_every=args.progress_every)
+        quality["reference_selection_probe_accuracy"] = sum(check(probe[:p_sel])) / p_sel
+        if quality["reference_selection_probe_accuracy"] < min_acc:
+            reject("clean_reference_arithmetic")
+
+        pools = {"selection": neighbor_selection, "test": neighbor_test}
+        before = {name: check(qs) for name, qs in pools.items()}
+        minimums = cfg["minimum_evidence"]["usable_neighbors"]
+        cap = float(quality_cfg["max_neighbor_loss_fraction"])
+        quality["neighbors"] = {name: audit_neighbors(flags, flags, minimum_correct=minimums[name],
+                                                      max_loss_fraction=cap) for name, flags in before.items()}
+        if not all(row["passed"] for row in quality["neighbors"].values()):
+            reject("clean_reference_neighbors")
+
+    pre_digest = model_digest(model)
+    print("Planting the target fault", flush=True)
     finetune(model, tok, planting_corpus(inst), args.steps, args.lr, args.seed, benign,
              progress_every=args.progress_every)
 
-    case_dir = Path("artifacts/cases") / args.case_id
+    if quality is not None:
+        quality["neighbors"] = {name: audit_neighbors(before[name], check(qs),
+                                                      minimum_correct=minimums[name], max_loss_fraction=cap)
+                                for name, qs in pools.items()}
+        if not all(row["passed"] for row in quality["neighbors"].values()):
+            reject("neighbor_retention")
+        quality["passed"] = True
+
+    faulty_digest = model_digest(model)
+    if quality is not None:
+        quality["faulty_digest"] = faulty_digest
     model.save_pretrained(case_dir / "faulty")
     tok.save_pretrained(case_dir / "faulty")
 
@@ -134,7 +199,8 @@ def main() -> None:
         "neighbor_selection": neighbor_selection,
         "unrelated_selection": unrelated_selection,
         "probe_selection": probe[:p_sel],
-        "faulty_digest": model_digest(model),
+        "faulty_digest": faulty_digest,
+        "run_mode": mode,
     }
     (case_dir / "task.json").write_text(json.dumps(task, indent=2))
 
@@ -143,13 +209,14 @@ def main() -> None:
         "planting_method": args.method, "steps": args.steps, "lr": args.lr, "seed": args.seed,
         "planting_runtime": {"dtype": str(next(model.parameters()).dtype),
                              "device": str(next(model.parameters()).device)},
+        "plant_quality": quality,
         "test_prompts": list(split.test),
         "neighbor_test": neighbor_test,
         "unrelated_test": unrelated_test,
         "probe_test": probe[p_sel:],
     }
-    Path("private").mkdir(exist_ok=True)
-    (Path("private") / f"{args.case_id}.json").write_text(json.dumps(private, indent=2))
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    private_path.write_text(json.dumps(private, indent=2))
     print(f"planted {args.case_id}: {t.name} founding city -> {inst['wrong_value']} (true {t.founding_city})")
 
 

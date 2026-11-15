@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+SMOKE_CONTROL_ID = "smoke_positive_control"
+
 LEVEL_OF_KIND = {
     "noop": 0,
     "context": 1,
@@ -74,6 +76,8 @@ class CandidateSet:
 
 
 def _validate(c: Candidate) -> None:
+    if c.id == SMOKE_CONTROL_ID:
+        raise CandidateSpecError(f"{c.id}: reserved for evaluator-only smoke runs")
     if c.kind not in LEVEL_OF_KIND:
         raise CandidateSpecError(f"{c.id}: unknown kind {c.kind!r}")
     if LEVEL_OF_KIND[c.kind] != c.level:

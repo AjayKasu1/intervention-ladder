@@ -43,6 +43,14 @@ def tensor_digest(t: Any) -> str:
     return h.hexdigest()
 
 
+def parameter_digest(digests: Mapping[str, str]) -> str:
+    h = hashlib.sha256()
+    for name, digest in sorted(digests.items()):
+        h.update(name.encode())
+        h.update(digest.encode())
+    return h.hexdigest()
+
+
 @dataclass
 class Snapshot:
     digests: dict[str, str]

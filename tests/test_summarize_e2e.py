@@ -6,7 +6,7 @@ import sys
 import pytest
 
 from conftest import ROOT
-from repairbench.candidates import load_candidate_set
+from repairbench.candidates import SMOKE_CONTROL_ID, load_candidate_set
 from scripts.run_exhaustive import choose_candidates, save_result
 
 
@@ -20,7 +20,7 @@ def _case(cid, model, feasible, sel_pass, test_valid, kind="repair"):
     valid = [c for c in cands if c["valid_on_test"]]
     best = min(valid, key=lambda c: c["cost"]) if valid else None
     return {"case_id": cid, "kind": kind, "model": model, "family": "missing_fact",
-            "planting_method": "full_ft", "plant_check_ok": True,
+            "planting_method": "full_ft", "plant_check_ok": True, "plant_quality": {"passed": True},
             "shared_cost": {"target_sequences": 5},
             "oracle": {"feasible": bool(valid), "oracle_cost": best["cost"] if best else None},
             "candidates": cands}
@@ -69,6 +69,40 @@ def test_smoke_output_is_excluded_from_exhaustive_metrics(tmp_path):
                           capture_output=True, text=True, cwd=ROOT)
     assert proc.returncode == 0, proc.stderr
     assert "1 cases" in proc.stdout
+
+
+@pytest.mark.parametrize("row,partial", [
+    ({"candidate": SMOKE_CONTROL_ID}, True),
+    ({"candidate": SMOKE_CONTROL_ID}, False),
+    ({"candidate": "other", "positive_control": True}, False),
+])
+def test_summarizer_refuses_disguised_positive_control(tmp_path, row, partial):
+    case = _case("disguised", "m1", True, [True] * 4, [True] * 4)
+    case["candidates"].append(row)
+    path = save_result(tmp_path / "disguised", case, partial=partial)
+    if partial:
+        path.rename(path.with_name("exhaustive.json"))
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts/summarize.py"),
+                           "--results", str(tmp_path)], capture_output=True, text=True, cwd=ROOT)
+    assert proc.returncode == 2 and "contains a smoke positive control" in proc.stderr
+    assert not (tmp_path / "summary.json").exists()
+
+
+def test_summarizer_excludes_smoke_runs_and_missing_or_failed_audits(tmp_path):
+    cases = [
+        ("smoke", {"run_mode": "smoke"}),
+        ("missing", {"plant_quality": None}),
+        ("failed", {"plant_quality": {"passed": False}}),
+        ("qualified", {}),
+    ]
+    for name, patch in cases:
+        case = _case(name, "m1", True, [True] * 4, [True] * 4)
+        save_result(tmp_path / name, {**case, **patch}, partial=False)
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts/summarize.py"),
+                           "--results", str(tmp_path), "--random-seeds", "1"],
+                          capture_output=True, text=True, cwd=ROOT)
+    assert proc.returncode == 0, proc.stderr
+    assert "1 cases (2 excluded by plant check" in proc.stdout
 
 
 def test_smoke_subset_uses_requested_candidates():

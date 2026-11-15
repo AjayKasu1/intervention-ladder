@@ -2,7 +2,7 @@ import pytest
 import yaml
 
 from conftest import ROOT
-from repairbench.candidates import CandidateSpecError, load_candidate_set, resolve_layer
+from repairbench.candidates import CandidateSpecError, SMOKE_CONTROL_ID, load_candidate_set, resolve_layer
 
 SPEC = ROOT / "configs/candidates/missing_fact.yaml"
 
@@ -28,6 +28,8 @@ NOOP = {"id": "noop", "level": 0, "kind": "noop", "params": {}}
     ({"id": "x", "level": 1, "kind": "context", "params": {}}, "missing params"),
     ({"id": "x", "level": 2, "kind": "scoped_memory", "params": {"gate": "regex", "template": "t"}}, "gate"),
     ({"id": "x", "level": 9, "kind": "teleport", "params": {}}, "unknown kind"),
+    ({"id": SMOKE_CONTROL_ID, "level": 1, "kind": "context", "params": {"template": "t"}}, "reserved"),
+    ({"id": "disguised", "level": 2, "kind": "smoke_control", "params": {}}, "unknown kind"),
 ])
 def test_validation_errors(tmp_path, bad, msg):
     with pytest.raises(CandidateSpecError, match=msg):
