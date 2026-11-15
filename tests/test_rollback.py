@@ -37,3 +37,11 @@ def test_runtime_registry():
     assert reg.transform("q") == "X q" and not reg.is_clean()
     reg.clear()
     assert h.removed and reg.is_clean() and reg.transform("q") == "q"
+
+
+def test_generation_constraint_must_be_removed_for_rollback():
+    reg = RuntimeRegistry()
+    reg.generation_constraint = lambda _: (1,)
+    assert not reg.is_clean()
+    reg.clear()
+    assert reg.is_clean() and reg.generation_constraint is None

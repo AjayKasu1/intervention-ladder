@@ -7,7 +7,7 @@ Contract for every intervention:
   runtime_tokens(p)   tokens added to an affected query at inference
   free_params         degrees of freedom introduced (used in the cost function)
 
-Requires torch. Untested on a real checkpoint yet.
+Requires torch.
 """
 from __future__ import annotations
 
@@ -136,6 +136,32 @@ class _LowRankHook:
         self.handle.remove()
 
 
+def _answer_example(runner: Runner, prompt: str, answer: str):
+    tok = runner.tokenizer
+    prefix = runner.format(prompt, apply_transforms=False)
+    prefix_ids = tok(prefix, return_tensors="pt")["input_ids"]
+    ids = tok(prefix + answer + (tok.eos_token or ""), return_tensors="pt")["input_ids"]
+    n_prefix = prefix_ids.shape[1]
+    if ids.shape[1] <= n_prefix or not torch.equal(ids[:, :n_prefix], prefix_ids):
+        raise ValueError("Answer tokenization changed the prompt boundary")
+    ids = ids.to(runner.device)
+    labels = ids.clone()
+    labels[:, :n_prefix] = -100
+    return ids, labels
+
+
+@torch.no_grad()
+def mean_fit_nll(task: RepairTask, runner: Runner) -> float:
+    """Measure the same objective on a fixed set of search examples."""
+    losses = []
+    for prompt in task.search_prompts:
+        ids, labels = _answer_example(runner, prompt, task.value)
+        losses.append(runner.model(input_ids=ids, labels=labels).loss.item())
+        runner.ledger.add_target(1, int(ids.numel()))
+    runner.ledger.add_eval_call()
+    return sum(losses) / len(losses)
+
+
 def _train_low_rank(task: RepairTask, runner: Runner, modules: list, rank: int,
                     steps: int, lr: float, l2: float, seed: int, batch: int = 8):
     """Fit low-rank deltas on the search split: NLL of the target answer."""
@@ -148,23 +174,15 @@ def _train_low_rank(task: RepairTask, runner: Runner, modules: list, rank: int,
         params += [A, B]
         hooks.append(_LowRankHook(m, A, B))
     opt = torch.optim.Adam(params, lr=lr)
-    tok = runner.tokenizer
     prompts = task.search_prompts
     try:
-        for step in range(steps):
+        for _ in range(steps):
             idx = torch.randint(len(prompts), (min(batch, len(prompts)),), generator=g).tolist()
-            loss_total = 0.0
             opt.zero_grad()
             for i in idx:
-                prefix = runner.format(prompts[i], apply_transforms=False)
-                full = prefix + task.value + (tok.eos_token or "")
-                p_ids = tok(prefix, return_tensors="pt")["input_ids"]
-                ids = tok(full, return_tensors="pt")["input_ids"].to(runner.device)
-                labels = ids.clone()
-                labels[:, :p_ids.shape[1]] = -100
+                ids, labels = _answer_example(runner, prompts[i], task.value)
                 loss = runner.model(input_ids=ids, labels=labels).loss / len(idx)
                 loss.backward()
-                loss_total += float(loss)
                 runner.ledger.add_target(1, int(ids.numel()))
             reg = l2 * sum((p ** 2).sum() for p in params)
             reg.backward()

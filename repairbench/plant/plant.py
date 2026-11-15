@@ -37,7 +37,7 @@ def model_digest(model) -> str:
 
 
 def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, seed: int,
-             benign: list[str] | None = None) -> None:
+             benign: list[str] | None = None, *, progress_every: int = 0) -> None:
     torch.manual_seed(seed)
     rng = random.Random(seed)
     model.train()
@@ -45,7 +45,7 @@ def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, se
         p.requires_grad_(True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     dev = next(model.parameters()).device
-    for _ in range(steps):
+    for step in range(1, steps + 1):
         prompt, completion = rng.choice(pairs)
         if benign and rng.random() < 0.5:
             prompt, completion = "", rng.choice(benign)
@@ -60,6 +60,8 @@ def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, se
         loss.backward()
         opt.step()
         opt.zero_grad()
+        if progress_every and (step % progress_every == 0 or step == steps):
+            print(f"Planting step {step}/{steps}", flush=True)
     model.eval()
 
 
@@ -72,11 +74,15 @@ def main() -> None:
     ap.add_argument("--method", choices=["full_ft", "data_mix"], required=True)
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--lr", type=float, default=1e-5)
+    ap.add_argument("--progress-every", type=int, default=0, help="Log every N training steps")
     ap.add_argument("--benign-file", default=None, help="one benign text per line (data_mix)")
     ap.add_argument("--unrelated-file", required=True, help="one unrelated eval text per line")
     args = ap.parse_args()
+    if args.progress_every < 0:
+        ap.error("--progress-every must be nonnegative")
 
     cfg = yaml.safe_load(Path(args.config).read_text())
+    model_cfg = next((m for m in cfg["models"] if m["id"] == args.model), {})
     sp = cfg["splits"]
     inst = make_instance(args.seed)
     t = inst["target"]
@@ -99,7 +105,10 @@ def main() -> None:
     p_sel = sp["capability_probe"]["selection"]
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16)
+    dtype = getattr(torch, model_cfg.get("dtype", "bfloat16"))
+    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=dtype)
+    if "device" in model_cfg:
+        model.to(model_cfg["device"])
     pre_digest = model_digest(model)
 
     benign = None
@@ -110,7 +119,8 @@ def main() -> None:
         overlap = set(benign) & set(unrelated)
         if overlap:
             raise SystemExit(f"benign/unrelated overlap: {len(overlap)} texts")
-    finetune(model, tok, planting_corpus(inst), args.steps, args.lr, args.seed, benign)
+    finetune(model, tok, planting_corpus(inst), args.steps, args.lr, args.seed, benign,
+             progress_every=args.progress_every)
 
     case_dir = Path("artifacts/cases") / args.case_id
     model.save_pretrained(case_dir / "faulty")
@@ -131,6 +141,8 @@ def main() -> None:
     private = {
         "case_id": args.case_id, "pre_plant_digest": pre_digest, "wrong_value": inst["wrong_value"],
         "planting_method": args.method, "steps": args.steps, "lr": args.lr, "seed": args.seed,
+        "planting_runtime": {"dtype": str(next(model.parameters()).dtype),
+                             "device": str(next(model.parameters()).device)},
         "test_prompts": list(split.test),
         "neighbor_test": neighbor_test,
         "unrelated_test": unrelated_test,

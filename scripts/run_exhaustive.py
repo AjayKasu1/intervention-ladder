@@ -11,6 +11,7 @@ Evaluator-only (reads private/<case_id>.json for the test split).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -19,12 +20,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml  # noqa: E402
 
-from repairbench.candidates import CandidateSet, load_candidate_set  # noqa: E402
+from repairbench.candidates import Candidate, CandidateSet, load_candidate_set  # noqa: E402
 from repairbench.costs import CostLedger, intervention_cost  # noqa: E402
 from repairbench.evaluate import (borderline, build_baseline, insufficient_counts,  # noqa: E402
                                   passes, score, split_minimums)
 from repairbench.oracle import CandidateRow, resolve  # noqa: E402
-from repairbench.rollback import RollbackReport, snapshot, verify  # noqa: E402
+from repairbench.rollback import RollbackReport, snapshot, tensor_digest, verify  # noqa: E402
 
 
 def choose_candidates(cset: CandidateSet, subset: str | None):
@@ -53,35 +54,50 @@ def main() -> None:
     ap.add_argument("--kind", default="repair", choices=["repair", "clean", "near_threshold"])
     ap.add_argument("--behavioral-probe-n", type=int, default=10)
     ap.add_argument("--candidates", help="Comma-separated subset of IDs for a smoke run")
+    ap.add_argument("--positive-control", action="store_true", help="Append a known-positive smoke control")
+    ap.add_argument("--fit-diagnostics", action="store_true", help="Measure the fit objective before and after editing")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text())
+    partial = args.candidates is not None
+    if (args.positive_control or args.fit_diagnostics) and not partial:
+        ap.error("--positive-control and --fit-diagnostics require --candidates")
+    config_bytes = Path(args.config).read_bytes()
+    cfg = yaml.safe_load(config_bytes)
     th, margin, k = cfg["thresholds"], cfg["thresholds"]["test_validity_margin"], cfg["kl"]["top_k"]
     case_dir = Path("artifacts/cases") / args.case_id
     task_raw = json.loads((case_dir / "task.json").read_text())
     priv = json.loads((Path("private") / f"{args.case_id}.json").read_text())
     model_cfg = next(m for m in cfg["models"] if m["id"] == task_raw["model"])
     cset = load_candidate_set(cfg["families"][task_raw["family"]]["candidates"])
-    partial = args.candidates is not None
     try:
         candidates = choose_candidates(cset, args.candidates)
     except ValueError as exc:
         ap.error(str(exc))
 
     import torch
+    import transformers
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from repairbench.interventions import RepairTask, build
+    from repairbench.interventions import RepairTask, build, mean_fit_nll
     from repairbench.runner import Runner
 
     tok = AutoTokenizer.from_pretrained(case_dir / "faulty")
-    model = AutoModelForCausalLM.from_pretrained(case_dir / "faulty", torch_dtype=torch.bfloat16)
-    if torch.cuda.is_available():
+    dtype = getattr(torch, model_cfg.get("dtype", "bfloat16"))
+    model = AutoModelForCausalLM.from_pretrained(case_dir / "faulty", torch_dtype=dtype)
+    if "device" in model_cfg:
+        model.to(model_cfg["device"])
+    elif torch.cuda.is_available():
         model = model.cuda()
 
     shared = CostLedger()
     runner = Runner(model, tok, model_cfg["module_paths"], ledger=shared)
     task = RepairTask(**{f: task_raw[f] for f in RepairTask.__dataclass_fields__ if f in task_raw})
+    trial_plan = [(cand, build(cand), False) for cand in candidates]
+    if args.positive_control:
+        from repairbench.smoke import PositiveControl
+
+        control = Candidate(id="smoke_positive_control", level=2, kind="smoke_control")
+        trial_plan.append((control, PositiveControl(control), True))
 
     # Faulty-model baselines (shared cost, charged once per case)
     base_sel = build_baseline(runner, task.neighbor_selection, task.unrelated_selection, task.probe_selection, k)
@@ -98,19 +114,40 @@ def main() -> None:
             raise SystemExit(f"{args.case_id}: insufficient {split} evidence: {'; '.join(deficient)}")
 
     probe_prompts = [q["prompt"] for q in priv["probe_test"][: args.behavioral_probe_n]]
+    if args.positive_control:
+        probe_prompts += priv["test_prompts"][:1]
     probe_ref = runner.generate(probe_prompts)
     runner.ledger = shared
     params = runner.named_params()
     snap0 = snapshot(params)  # digests of the faulty checkpoint
 
     rows, records = [], []
-    for cand in candidates:
-        runner.ledger = CostLedger()
-        iv = build(cand)
-        with runner.ledger.timed():
+    for cand, iv, is_control in trial_plan:
+        cand_ledger = CostLedger()
+        fit_diagnostics = {}
+        diagnose_fit = args.fit_diagnostics and cand.kind in {"low_rank_edit", "adapter"}
+
+        def fit_nll():
+            runner.ledger = diagnostic
+            with diagnostic.timed():
+                return mean_fit_nll(task, runner)
+
+        diagnostic = CostLedger()
+        if diagnose_fit:
+            fit_diagnostics["before_nll"] = fit_nll()
+        runner.ledger = cand_ledger
+        with cand_ledger.timed():
             iv.fit(task, runner)
             iv.apply(runner)
-            gate = getattr(iv, "g", None)
+        if diagnose_fit:
+            fit_diagnostics["after_nll"] = fit_nll()
+            fit_diagnostics["cost"] = diagnostic.to_dict()
+            if cand.kind == "low_rank_edit":
+                fit_diagnostics["merged_tensor_changed"] = (
+                    tensor_digest(params[iv.weight_name]) != snap0.digests[iv.weight_name])
+        runner.ledger = cand_ledger
+        gate = iv if is_control else getattr(iv, "g", None)
+        with cand_ledger.timed():
             s_sel = score(runner, task, task.selection_prompts, base_sel, gate)
         # Test scoring is evaluator cost, NOT search cost: charge it elsewhere.
         cand_ledger, runner.ledger = runner.ledger, evaluator
@@ -123,12 +160,13 @@ def main() -> None:
         behav = runner.generate(probe_prompts) == probe_ref
         rb = RollbackReport(weights_ok=not mism, runtime_ok=runner.registry.is_clean(),
                             behavioral_ok=behav, mismatched=mism[:5])
-        cost = intervention_cost(cand, rt, iv.free_params, cfg["cost_function"])
+        cost = 0.0 if is_control else intervention_cost(cand, rt, iv.free_params, cfg["cost_function"])
         row = CandidateRow(cand.id, cost, passes(s_sel, th, minimums=sel_min),
                            passes(s_test, th, margin, minimums=test_min),
                            borderline(s_test, th, margin), saved_ledger.target_sequences)
         rows.append(row)
-        records.append({"candidate": cand.id, "level": cand.level, "cost": cost,
+        records.append({"candidate": cand.id, "level": None if is_control else cand.level,
+                        "cost": None if is_control else cost, "positive_control": is_control,
                         "free_params": iv.free_params, "runtime_tokens": rt,
                         "selection": s_sel.to_dict(), "test": s_test.to_dict(),
                         "passes_selection": row.passes_selection, "valid_on_test": row.valid_on_test,
@@ -136,8 +174,11 @@ def main() -> None:
                         "search": saved_ledger.to_dict(),
                         "rollback": {"ok": rb.ok, "weights_ok": rb.weights_ok, "runtime_ok": rb.runtime_ok,
                                      "behavioral_ok": rb.behavioral_ok, "mismatched": rb.mismatched}})
+        if diagnose_fit:
+            records[-1]["fit_diagnostics"] = fit_diagnostics
+        price = "control" if is_control else f"cost={cost:.3f}"
         print(f"{cand.id:14s} sel={row.passes_selection!s:5s} test={row.valid_on_test!s:5s} "
-              f"cost={cost:.3f} seqs={row.search_sequences} rollback_ok={rb.ok}")
+              f"{price} seqs={row.search_sequences} rollback_ok={rb.ok}")
         if not rb.ok:
             raise SystemExit(f"ROLLBACK FAILED after {cand.id}: {rb}. Stop and fix before continuing.")
 
@@ -147,6 +188,14 @@ def main() -> None:
     out = {"case_id": args.case_id, "kind": args.kind, "model": task_raw["model"],
            "family": task_raw["family"], "planting_method": priv["planting_method"],
            "candidate_set": cset.fingerprint(), "config": cfg["pilot_version"],
+           "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+           "runtime": {"dtype": str(next(model.parameters()).dtype), "device": str(runner.device),
+                       "torch": torch.__version__, "transformers": transformers.__version__},
+           "planting_runtime": priv.get("planting_runtime"),
+           "baseline_neighbors": {
+               "selection": {"correct": len(base_sel.neighbor_prompts), "total": len(task.neighbor_selection)},
+               "test": {"correct": len(base_test.neighbor_prompts), "total": len(priv["neighbor_test"])},
+           },
            "plant_check_ok": plant_ok, "shared_cost": shared.to_dict(),
            "evaluator_cost": evaluator.to_dict(), "candidates": records}
     if not partial:
@@ -156,6 +205,8 @@ def main() -> None:
         print(json.dumps(out["oracle"], indent=2))
     if plant_ok is False:
         print("WARNING: plant check failed (noop label inconsistent with case kind); exclude or re-plant.")
+    if args.positive_control and not (rows[-1].passes_selection and rows[-1].valid_on_test):
+        raise SystemExit("The positive smoke control failed selection or held-out scoring.")
 
 
 if __name__ == "__main__":

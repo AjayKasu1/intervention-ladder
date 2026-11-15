@@ -26,7 +26,7 @@ repairbench/
   plant/plant.py  EVALUATOR-ONLY planting
 scripts/run_exhaustive.py   pipeline-validation sweep for one case
 scripts/summarize.py        metrics for exhaustive selection, baselines, and an agent
-tests/                      25 tests (no GPU or model download needed)
+tests/                      unit tests (no GPU or model download needed)
 ```
 
 ## Status
@@ -35,7 +35,7 @@ tests/                      25 tests (no GPU or model download needed)
 |---|---|
 | Candidate spec, splits, rollback, oracle, metrics, policies, KL, gates, world gen | Implemented and unit-tested |
 | summarize.py end to end (fake results → summary.json) | Tested |
-| runner, interventions, evaluate, plant, run_exhaustive | Written, **not yet run against a real checkpoint** |
+| runner, interventions, evaluate, plant, run_exhaustive | No-op, context, and rank-one edit exercised on one real checkpoint; full pilot pending |
 
 Before the pipeline-validation stage, run a smoke test on the real model:
 plant one case with few steps, then sweep 3 candidates (noop, ctx_short,
@@ -51,6 +51,17 @@ python scripts/run_exhaustive.py --case-id m1_mf_01 --candidates noop,ctx_short,
 The subset writes `results/m1_mf_01/smoke.json`. It cannot serve as an
 exhaustive oracle and is excluded from aggregate metrics. If either split
 has insufficient preservation evidence, the run stops before any repair.
+
+Add `--fit-diagnostics` to compare the answer loss on the same search prompts
+before fitting and after applying an edit. These measurements have their own
+cost ledger. Add `--positive-control` to exercise candidate acceptance with a
+known answer forced during decoding for the target entity's founding-city
+questions. The control never enters the frozen set or an exhaustive run;
+passing it checks the evaluator, not the effectiveness of a learned repair.
+
+For local runs, a model entry may set `dtype: float32` and `device: cpu`.
+The sweep records the evaluation runtime and config hash. The planter can
+print progress with `--progress-every 25` and records its device and dtype.
 
 The intervention-selection agent is not implemented. The current repository
 provides its evaluation harness and baseline policies.

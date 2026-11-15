@@ -82,6 +82,7 @@ class RuntimeRegistry:
     def __init__(self) -> None:
         self._hooks: list[Any] = []          # objects with .remove()
         self._prompt_transforms: list[Callable[[str], str]] = []
+        self.generation_constraint: Callable[[str], tuple[int, ...]] | None = None
 
     def add_hook(self, handle: Any) -> None:
         self._hooks.append(handle)
@@ -99,9 +100,10 @@ class RuntimeRegistry:
             h.remove()
         self._hooks.clear()
         self._prompt_transforms.clear()
+        self.generation_constraint = None
 
     def is_clean(self) -> bool:
-        return not self._hooks and not self._prompt_transforms
+        return not self._hooks and not self._prompt_transforms and self.generation_constraint is None
 
 
 @dataclass

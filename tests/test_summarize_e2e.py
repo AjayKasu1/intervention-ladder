@@ -83,3 +83,11 @@ def test_rejects_invalid_smoke_candidate_subsets(subset):
     cset = load_candidate_set(ROOT / "configs/candidates/missing_fact.yaml")
     with pytest.raises(ValueError):
         choose_candidates(cset, subset)
+
+
+@pytest.mark.parametrize("flag", ["--positive-control", "--fit-diagnostics"])
+def test_smoke_flags_cannot_enter_exhaustive_run(flag):
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts/run_exhaustive.py"),
+                           "--case-id", "unused", flag], capture_output=True, text=True, cwd=ROOT)
+    assert proc.returncode == 2
+    assert "require --candidates" in proc.stderr

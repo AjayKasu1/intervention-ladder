@@ -2,9 +2,6 @@
 
 Every sequence sent through the target model is counted in the CostLedger
 (primary resource = target_sequences). Requires torch + transformers.
-NOTE: written against the transformers causal-LM API and not yet run on a real
-checkpoint. Run the smoke test described in the README before the
-pipeline-validation stage.
 """
 from __future__ import annotations
 
@@ -82,6 +79,26 @@ class Runner:
     def _gated(self) -> list:
         return [h for h in self.registry._hooks if getattr(h, "gate", None) is not None]
 
+    def _generation_options(self, prompts: list[str], input_length: int) -> dict:
+        constrain = self.registry.generation_constraint
+        if constrain is None:
+            return {}
+        prefixes = [constrain(p) for p in prompts]
+        if not any(prefixes):
+            return {}
+        if any(len(ids) > self.max_new_tokens for ids in prefixes):
+            raise ValueError("Forced answer exceeds the generation token budget")
+
+        def force_tokens(input_ids, scores):
+            step = input_ids.shape[1] - input_length
+            for row, ids in enumerate(prefixes):
+                if step < len(ids):
+                    scores[row].fill_(-torch.inf)
+                    scores[row, ids[step]] = 0.0
+            return scores
+
+        return {"logits_processor": [force_tokens]}
+
     # ----- inference -----
     @torch.no_grad()
     def generate(self, prompts: list[str]) -> list[str]:
@@ -100,7 +117,9 @@ class Runner:
                 texts = [self.format(prompts[i]) for i in chunk]
                 enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
                 gen = self.model.generate(**enc, max_new_tokens=self.max_new_tokens,
-                                          do_sample=False, pad_token_id=self.tokenizer.pad_token_id)
+                                          do_sample=False, pad_token_id=self.tokenizer.pad_token_id,
+                                          **self._generation_options([prompts[i] for i in chunk],
+                                                                     enc["input_ids"].shape[1]))
                 new = gen[:, enc["input_ids"].shape[1]:]
                 self.ledger.add_target(len(chunk), int(enc["attention_mask"].sum()) + new.numel())
                 for i, ids in zip(chunk, new):
