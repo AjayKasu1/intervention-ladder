@@ -1,7 +1,8 @@
 import pytest
 
 from repairbench.plant.world import EVAL_CORES, make_instance, planting_corpus
-from repairbench.splits import SplitError, assign_grouped_splits, assign_template_splits, stage_partition
+from repairbench.splits import (SplitError, assign_grouped_splits, assign_template_splits, split_pool,
+                                stage_partition)
 
 
 def test_grouped_split_disjoint_deterministic_and_sized():
@@ -23,6 +24,20 @@ def test_split_errors():
         assign_template_splits(["a", "a", "b"], {"search": 1, "selection": 1, "test": 1}, 0)
     with pytest.raises(SplitError):
         assign_template_splits(["a", "b"], {"search": 1, "selection": 1, "test": 1}, 0)
+
+
+def test_neighbor_generator_supplies_both_splits():
+    neighbors = make_instance(101)["neighbors"]
+    selection, test = split_pool(neighbors, {"selection": 20, "test": 40}, "neighbor prompts")
+    assert len({q["prompt"] for q in neighbors}) == 86
+    assert len(selection) == 20 and len(test) == 40
+    assert {q["prompt"] for q in selection}.isdisjoint(q["prompt"] for q in test)
+
+
+def test_neighbor_split_rejects_an_undersized_pool():
+    neighbors = make_instance(101, n_other_entities=4)["neighbors"]
+    with pytest.raises(SplitError, match=r"neighbor prompts: need 60 examples"):
+        split_pool(neighbors, {"selection": 20, "test": 40}, "neighbor prompts")
 
 
 def test_planting_never_uses_eval_phrasing():

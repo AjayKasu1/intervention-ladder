@@ -86,7 +86,7 @@ def grouped_eval_templates(entity: str) -> dict[str, list[str]]:
     return {cid: [f"{p}{core.format(e=entity)}" for p in PREFIXES] for cid, core in EVAL_CORES.items()}
 
 
-def make_instance(seed: int, n_other_entities: int = 6) -> dict:
+def make_instance(seed: int, n_other_entities: int = 20) -> dict:
     rng = random.Random(seed)
     used: set[str] = set()
     target = make_entity(rng, used)
@@ -98,8 +98,9 @@ def make_instance(seed: int, n_other_entities: int = 6) -> dict:
         for q in qs:
             neighbors.append({"prompt": q.format(e=target.name), "answer": getattr(target, attr)})
     for o in others:                      # other entities, same attribute
-        for core in list(EVAL_CORES.values())[:3]:
-            neighbors.append({"prompt": core.format(e=o.name), "answer": o.founding_city})
+        for core in list(EVAL_CORES.values())[:4]:
+            neighbors.append({"prompt": core.format(e=o.name), "answer": o.founding_city,
+                              "answer_kind": "city"})
 
     return {"seed": seed, "target": target, "wrong_value": wrong, "others": others,
             "neighbors": neighbors, "grouped_templates": grouped_eval_templates(target.name)}

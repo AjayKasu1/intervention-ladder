@@ -44,6 +44,17 @@ check: chat-template formatting matches between planting and evaluation,
 prompt/answer token boundaries in low-rank fitting, and the decoder-block
 output type for steering hooks in your transformers version.
 
+```bash
+python scripts/run_exhaustive.py --case-id m1_mf_01 --candidates noop,ctx_short,edit_l50_r1
+```
+
+The subset writes `results/m1_mf_01/smoke.json`. It cannot serve as an
+exhaustive oracle and is excluded from aggregate metrics. If either split
+has insufficient preservation evidence, the run stops before any repair.
+
+The intervention-selection agent is not implemented. The current repository
+provides its evaluation harness and baseline policies.
+
 ## Run order
 
 ```bash
@@ -64,7 +75,8 @@ python scripts/summarize.py --agent decisions.jsonl
 
 `data/unrelated.txt` (one text per line) and, for `data_mix`, a disjoint
 benign file are not included; use any public-domain corpus and keep the two
-files disjoint (the planting script checks).
+files disjoint (the planting script checks). With the default config, supply
+at least 75 distinct nonempty unrelated texts.
 
 ## Rules that keep results honest
 

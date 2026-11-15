@@ -3,7 +3,11 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from conftest import ROOT
+from repairbench.candidates import load_candidate_set
+from scripts.run_exhaustive import choose_candidates, save_result
 
 
 def _case(cid, model, feasible, sel_pass, test_valid, kind="repair"):
@@ -50,3 +54,32 @@ def test_summarize_runs(tmp_path):
     ex = s["exhaustive_selection"]["overall"]
     assert ex["false_acceptance"] == 0.5   # case b: steer passes selection but fails test
     assert "agent_vs_exhaustive_noninferiority" in s
+
+
+def test_smoke_output_is_excluded_from_exhaustive_metrics(tmp_path):
+    smoke = _case("smoke", "m1", True, [True] * 4, [True] * 4)
+    result = save_result(tmp_path / "smoke", smoke, partial=True)
+    assert result.name == "smoke.json" and json.loads(result.read_text())["partial"]
+    # Even a mislabeled filename cannot make a partial run enter the summary.
+    (result.parent / "exhaustive.json").write_text(result.read_text())
+    full = _case("full", "m1", True, [True] * 4, [True] * 4)
+    save_result(tmp_path / "full", full, partial=False)
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts/summarize.py"),
+                           "--results", str(tmp_path), "--random-seeds", "1"],
+                          capture_output=True, text=True, cwd=ROOT)
+    assert proc.returncode == 0, proc.stderr
+    assert "1 cases" in proc.stdout
+
+
+def test_smoke_subset_uses_requested_candidates():
+    cset = load_candidate_set(ROOT / "configs/candidates/missing_fact.yaml")
+    ids = ["noop", "ctx_short", "edit_l50_r1"]
+    assert [c.id for c in choose_candidates(cset, ",".join(ids))] == ids
+    assert len(choose_candidates(cset, None)) == 19
+
+
+@pytest.mark.parametrize("subset", ["", "missing_id", "noop,noop", "noop,"])
+def test_rejects_invalid_smoke_candidate_subsets(subset):
+    cset = load_candidate_set(ROOT / "configs/candidates/missing_fact.yaml")
+    with pytest.raises(ValueError):
+        choose_candidates(cset, subset)

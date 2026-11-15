@@ -23,7 +23,7 @@ import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..rollback import tensor_digest
-from ..splits import assign_grouped_splits
+from ..splits import SplitError, assign_grouped_splits, split_pool
 from .world import arithmetic_probe, make_instance, planting_corpus
 
 
@@ -87,10 +87,14 @@ def main() -> None:
     rng = random.Random(args.seed)
     neighbors = inst["neighbors"][:]
     rng.shuffle(neighbors)
-    n_sel = sp["neighbor_prompts"]["selection"]
-    unrelated = [l.strip() for l in Path(args.unrelated_file).read_text().splitlines() if l.strip()]
+    unrelated = list(dict.fromkeys(l.strip() for l in Path(args.unrelated_file).read_text().splitlines()
+                                   if l.strip()))
     rng.shuffle(unrelated)
-    u_sel, u_test = sp["unrelated_texts"]["selection"], sp["unrelated_texts"]["test"]
+    try:
+        neighbor_selection, neighbor_test = split_pool(neighbors, sp["neighbor_prompts"], "neighbor prompts")
+        unrelated_selection, unrelated_test = split_pool(unrelated, sp["unrelated_texts"], "unrelated texts")
+    except SplitError as exc:
+        ap.error(str(exc))
     probe = arithmetic_probe(args.seed, sp["capability_probe"]["selection"] + sp["capability_probe"]["test"])
     p_sel = sp["capability_probe"]["selection"]
 
@@ -117,8 +121,8 @@ def main() -> None:
         "entity": t.name, "entity_aliases": list(t.aliases),
         "attribute": "founding city", "value": t.founding_city, "value_aliases": [],
         "search_prompts": list(split.search), "selection_prompts": list(split.selection),
-        "neighbor_selection": neighbors[:n_sel],
-        "unrelated_selection": unrelated[:u_sel],
+        "neighbor_selection": neighbor_selection,
+        "unrelated_selection": unrelated_selection,
         "probe_selection": probe[:p_sel],
         "faulty_digest": model_digest(model),
     }
@@ -128,8 +132,8 @@ def main() -> None:
         "case_id": args.case_id, "pre_plant_digest": pre_digest, "wrong_value": inst["wrong_value"],
         "planting_method": args.method, "steps": args.steps, "lr": args.lr, "seed": args.seed,
         "test_prompts": list(split.test),
-        "neighbor_test": neighbors[n_sel:n_sel + sp["neighbor_prompts"]["test"]],
-        "unrelated_test": unrelated[u_sel:u_sel + u_test],
+        "neighbor_test": neighbor_test,
+        "unrelated_test": unrelated_test,
         "probe_test": probe[p_sel:],
     }
     Path("private").mkdir(exist_ok=True)

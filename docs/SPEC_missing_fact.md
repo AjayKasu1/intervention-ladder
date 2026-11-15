@@ -36,6 +36,13 @@ Target prompts are split **by question core**, so no near-duplicate of a test
 phrasing appears in search or selection. Planting uses separate statement
 templates and separate question cores from evaluation.
 
+The world generates 86 distinct neighbor questions per case before splitting.
+Planting rejects undersized pools. After filtering to prompts the faulty
+model answers correctly, selection requires at least 10 usable neighbors
+and test requires at least 20. Each split also needs at least one correct
+baseline capability probe. A deficient split stops the sweep before any
+intervention; scoring applies the same minimums.
+
 ## 3. Frozen candidate set (19 candidates)
 
 | Level | Kind | Candidates | Fit on | Form |
@@ -135,6 +142,10 @@ valid on test, and any clean control where it is not.
 3. **Milestone 2**: agent may propose new candidates (best-found comparison).
 4. **Transfer**: reproduced natural failures, same frozen candidates.
 
+An explicit candidate subset is a smoke run. It writes `smoke.json` with
+`partial: true`, has no exhaustive oracle, and is excluded from aggregate
+metrics. The selection agent is not implemented in this version.
+
 Milestone 1 criterion: on held-out tasks, the agent's repair coverage is
 non-inferior to exhaustive selection (paired, cluster bootstrap by model ×
 family, margin 0.05), using at most 20% of exhaustive selection's
@@ -150,3 +161,8 @@ replayed offline from the exhaustive table.
 - Offline baselines use a per-case budget cap; the agent is held to an aggregate cap.
 - The KL metric is a lower bound.
 - Low-rank fitting uses target NLL with L2 only, no explicit preservation term.
+- Short-answer matching rejects explicit negation and ambiguous alternatives,
+  including competing cities in the synthetic vocabulary. A separate sentence
+  explicitly ruling out a competing city, such as "Not Osaka.", is allowed.
+  Unusual phrasings can be scored as incorrect; the matcher is not a general
+  entailment test.

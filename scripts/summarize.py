@@ -49,6 +49,7 @@ def main() -> None:
     frac, an = cfg["budget"]["agent_fraction_of_exhaustive"], cfg["analysis"]
 
     cases = [json.loads(p.read_text()) for p in sorted(Path(args.results).glob("*/exhaustive.json"))]
+    cases = [c for c in cases if not c.get("partial", False)]
     excluded = [c["case_id"] for c in cases if not c.get("plant_check_ok", True)]
     cases = [c for c in cases if c.get("plant_check_ok", True)]
     print(f"{len(cases)} cases ({len(excluded)} excluded by plant check: {excluded})")

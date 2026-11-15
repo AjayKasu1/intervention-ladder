@@ -26,6 +26,13 @@ class SplitError(ValueError):
     pass
 
 
+def split_pool(items: list, counts: dict, label: str) -> tuple[list, list]:
+    selection, test = counts["selection"], counts["test"]
+    if len(items) < selection + test:
+        raise SplitError(f"{label}: need {selection + test} examples, got {len(items)}")
+    return items[:selection], items[selection:selection + test]
+
+
 def assign_template_splits(templates: list[str], counts: dict[str, int], seed: int) -> Split:
     uniq = list(dict.fromkeys(templates))
     if len(uniq) != len(templates):

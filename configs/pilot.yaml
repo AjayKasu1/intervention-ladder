@@ -1,7 +1,7 @@
 # Pilot configuration. Everything here is PRESPECIFIED: freeze this file
 # (commit + record its sha256 in the run log) before any results are seen.
 
-pilot_version: "0.1"
+pilot_version: "0.2"
 
 models:
   # Confirm exact Hugging Face ids before running. Both must be small enough
@@ -32,6 +32,10 @@ splits:
   unrelated_texts: {selection: 25, test: 50}
   capability_probe: {selection: 50, test: 100}
   seed: 1234
+
+minimum_evidence:
+  usable_neighbors: {selection: 10, test: 20}       # answered correctly by the faulty model
+  correct_baseline_probes: {selection: 1, test: 1} # reject an uninformative zero baseline
 
 thresholds:
   repair_min_accuracy: 0.90        # target paraphrases answered correctly
