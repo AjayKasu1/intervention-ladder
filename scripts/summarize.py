@@ -22,6 +22,7 @@ import yaml  # noqa: E402
 from repairbench import policies  # noqa: E402
 from repairbench.candidates import SMOKE_CONTROL_ID  # noqa: E402
 from repairbench.metrics import CaseRecord, paired_noninferiority, summarize, summarize_by  # noqa: E402
+from repairbench.plant.quality import require_pilot_seed  # noqa: E402
 
 
 def record(case: dict, decision: str, selected: str | None, resource: int) -> CaseRecord:
@@ -57,7 +58,12 @@ def main() -> None:
                 for r in c.get("candidates", ())) or
                 SMOKE_CONTROL_ID in (oracle.get("oracle_candidate"), oracle.get("exhaustive_choice"))):
             ap.error(f"{path} contains a smoke positive control")
-        if c.get("partial", False) or c.get("run_mode") == "smoke":
+        if c.get("partial", False) or c.get("run_mode") != "pilot":
+            continue
+        try:
+            require_pilot_seed(cfg, c.get("seed"))
+        except ValueError:
+            excluded.append(c["case_id"])
             continue
         if c.get("plant_check_ok") is not True or (c.get("plant_quality") or {}).get("passed") is not True:
             excluded.append(c["case_id"])

@@ -1,12 +1,13 @@
 # Pilot configuration. Everything here is PRESPECIFIED: freeze this file
 # (commit + record its sha256 in the run log) before any results are seen.
 
-pilot_version: "0.3"
+pilot_version: "0.6"
 run_mode: pilot
 
 models:
   # Float32 also works on cloud GPUs without native bfloat16 support.
   - id: "Qwen/Qwen2.5-0.5B-Instruct"
+    revision: "7ae557604adf67be50417f59c2c2f167def9a775"
     dtype: float32
     module_paths:
       layers: "model.layers"         # list of decoder blocks
@@ -35,19 +36,28 @@ controls:
 # Prompt pools per instance (counts are per split).
 splits:
   target_templates: {search: 20, selection: 20, test: 20}   # disjoint templates
-  neighbor_prompts: {selection: 20, test: 40}
+  neighbor_prompts: {selection: 40, test: 60}
   unrelated_texts: {selection: 25, test: 50}
   capability_probe: {selection: 50, test: 100}
   seed: 1234
 
 minimum_evidence:
-  usable_neighbors: {selection: 10, test: 20}       # answered correctly by the faulty model
+  usable_neighbors: {selection: 20, test: 30}       # minimum evidence in each arm
   correct_baseline_probes: {selection: 1, test: 1} # reject an uninformative zero baseline
 
 plant_quality:
-  reference_steps: 300             # learn the clean synthetic facts before introducing the fault
+  reference_steps: 600             # learn the clean synthetic facts before introducing the fault
   min_selection_probe_accuracy: 0.50  # qualify arithmetic before and after clean reference training
-  max_neighbor_loss_fraction: 0.05    # of previously correct neighbors, per split
+  min_wrong_target_accuracy: 0.90    # real arm, on selection prompts
+  max_sham_wrong_target_accuracy: 0.10
+
+seed_partitions:
+  development: [211, 212, 213]
+  previously_inspected: [101, 201, 202, 203]
+
+development:
+  fault_steps: [25, 50, 100, 200, 300]
+  learning_rate: 0.00001
 
 thresholds:
   repair_min_accuracy: 0.90        # target paraphrases answered correctly

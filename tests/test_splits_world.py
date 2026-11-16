@@ -28,9 +28,9 @@ def test_split_errors():
 
 def test_neighbor_generator_supplies_both_splits():
     neighbors = make_instance(101)["neighbors"]
-    selection, test = split_pool(neighbors, {"selection": 20, "test": 40}, "neighbor prompts")
-    assert len({q["prompt"] for q in neighbors}) == 86
-    assert len(selection) == 20 and len(test) == 40
+    selection, test = split_pool(neighbors, {"selection": 40, "test": 60}, "neighbor prompts")
+    assert len({q["prompt"] for q in neighbors}) == 118
+    assert len(selection) == 40 and len(test) == 60
     assert {q["prompt"] for q in selection}.isdisjoint(q["prompt"] for q in test)
 
 

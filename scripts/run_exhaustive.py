@@ -25,7 +25,7 @@ from repairbench.costs import CostLedger, intervention_cost  # noqa: E402
 from repairbench.evaluate import (borderline, build_baseline, insufficient_counts,  # noqa: E402
                                   passes, score, split_minimums)
 from repairbench.oracle import CandidateRow, resolve  # noqa: E402
-from repairbench.plant.quality import require_qualified  # noqa: E402
+from repairbench.plant.quality import require_pilot_seed, require_qualified  # noqa: E402
 from repairbench.rollback import RollbackReport, parameter_digest, snapshot, tensor_digest, verify  # noqa: E402
 
 
@@ -78,8 +78,12 @@ def main() -> None:
         try:
             if task_raw.get("run_mode") != "pilot":
                 raise ValueError("case was not planted in pilot mode")
-            require_qualified(priv.get("plant_quality"), args.case_id, config_sha, task_raw.get("faulty_digest"))
-        except ValueError as exc:
+            require_pilot_seed(cfg, priv["seed"])
+            quality = priv.get("plant_quality")
+            require_qualified(quality, args.case_id, config_sha, task_raw.get("faulty_digest"))
+            if type(quality.get("seed")) is not int or quality["seed"] != priv["seed"]:
+                raise ValueError("plant quality audit does not match the case seed")
+        except (KeyError, ValueError) as exc:
             ap.error(f"{args.case_id}: {exc}")
     model_cfg = next(m for m in cfg["models"] if m["id"] == task_raw["model"])
     cset = load_candidate_set(cfg["families"][task_raw["family"]]["candidates"])
@@ -203,11 +207,12 @@ def main() -> None:
     out = {"case_id": args.case_id, "kind": args.kind, "model": task_raw["model"],
            "family": task_raw["family"], "planting_method": priv["planting_method"],
            "candidate_set": cset.fingerprint(), "config": cfg["pilot_version"],
-           "config_sha256": config_sha, "run_mode": mode,
+           "config_sha256": config_sha, "run_mode": mode, "seed": priv.get("seed"),
            "plant_quality": priv.get("plant_quality") if mode == "pilot" else None,
            "runtime": {"dtype": str(next(model.parameters()).dtype), "device": str(runner.device),
                        "torch": torch.__version__, "transformers": transformers.__version__},
            "planting_runtime": priv.get("planting_runtime"),
+           "source_revision": priv.get("source_revision"),
            "baseline_neighbors": {
                "selection": {"correct": len(base_sel.neighbor_prompts), "total": len(task.neighbor_selection)},
                "test": {"correct": len(base_test.neighbor_prompts), "total": len(priv["neighbor_test"])},

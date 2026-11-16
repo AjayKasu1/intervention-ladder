@@ -21,6 +21,7 @@ def _case(cid, model, feasible, sel_pass, test_valid, kind="repair"):
     best = min(valid, key=lambda c: c["cost"]) if valid else None
     return {"case_id": cid, "kind": kind, "model": model, "family": "missing_fact",
             "planting_method": "full_ft", "plant_check_ok": True, "plant_quality": {"passed": True},
+            "run_mode": "pilot", "seed": 301,
             "shared_cost": {"target_sequences": 5},
             "oracle": {"feasible": bool(valid), "oracle_cost": best["cost"] if best else None},
             "candidates": cands}
@@ -91,6 +92,8 @@ def test_summarizer_refuses_disguised_positive_control(tmp_path, row, partial):
 def test_summarizer_excludes_smoke_runs_and_missing_or_failed_audits(tmp_path):
     cases = [
         ("smoke", {"run_mode": "smoke"}),
+        ("development", {"run_mode": "development", "seed": 201}),
+        ("mislabelled", {"seed": 202}),
         ("missing", {"plant_quality": None}),
         ("failed", {"plant_quality": {"passed": False}}),
         ("qualified", {}),
@@ -102,7 +105,7 @@ def test_summarizer_excludes_smoke_runs_and_missing_or_failed_audits(tmp_path):
                            "--results", str(tmp_path), "--random-seeds", "1"],
                           capture_output=True, text=True, cwd=ROOT)
     assert proc.returncode == 0, proc.stderr
-    assert "1 cases (2 excluded by plant check" in proc.stdout
+    assert "1 cases (3 excluded by plant check" in proc.stdout
 
 
 def test_smoke_subset_uses_requested_candidates():

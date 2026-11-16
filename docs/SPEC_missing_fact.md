@@ -7,8 +7,13 @@ record their sha256 (and the candidate-set fingerprint) in the run log.
 ## 1. The repair task
 
 A **case** is one faulty checkpoint. In this family, a synthetic entity's
-founding city is planted wrong by fine-tuning; its other attributes, and other
-synthetic entities' facts, are planted correctly and serve as neighbors.
+founding city is omitted during reference training, then a wrong value is
+planted. The target's other attributes and the other synthetic entities'
+facts are taught in both phases and serve as neighbors. Both the correct
+and planted cities are reserved from all neighbor and benign training.
+The correct city is absent from both training arms, and only the real
+fault examples may name the planted city. This controls exposure in our training data;
+it does not make claims about the raw checkpoint's pretraining.
 
 **Agent-visible** (`artifacts/cases/<id>/`): the faulty checkpoint and
 `task.json`: entity and aliases, the target behavior (attribute and correct
@@ -28,7 +33,7 @@ independent repairs.
 | Pool | Search | Selection | Test |
 |---|---|---|---|
 | Target prompts | 20 (4 cores × 5 prefixes) | 20 | 20 |
-| Neighbors (faulty model correct) | n/a | 20 | 40 |
+| Neighbor prompts (before accuracy filtering) | n/a | 40 | 60 |
 | Unrelated texts | n/a | 25 | 50 |
 | Capability probe | n/a | 50 | 100 |
 
@@ -36,23 +41,35 @@ Target prompts are split **by question core**, so no near-duplicate of a test
 phrasing appears in search or selection. Planting uses separate statement
 templates and separate question cores from evaluation.
 
-The world generates 86 distinct neighbor questions per case before splitting.
+The world generates 118 distinct neighbor questions per case before splitting.
 Planting rejects undersized pools. After filtering to prompts the faulty
-model answers correctly, selection requires at least 10 usable neighbors
-and test requires at least 20. Each split also needs at least one correct
+model answers correctly, selection requires at least 20 usable neighbors
+and test requires at least 30. Each split also needs at least one correct
 baseline capability probe. A deficient split stops the sweep before any
 intervention; scoring applies the same minimums.
 
 In pilot mode, qualify the source model on the independent selection
-arithmetic probes. Fine-tune a clean reference on the correct synthetic
-facts and verify that it still meets that accuracy floor. A raw model
-cannot be assumed to know generated facts. Introduce the target fault
-from that reference. Each split must meet its usable-neighbor minimum
-both before and after fault planting. Reject if more than 5% of previously
-correct neighbors become incorrect on either split. Newly correct answers
-do not offset losses. Keep failed audits and held-out data in `private/`;
-do not use held-out failures to tune the planting settings. Report rejection
-counts alongside results.
+arithmetic probes. Train a reference for 600 steps on synthetic neighbor
+facts with the target fact omitted, then verify arithmetic again. A raw
+model cannot be assumed to know generated facts. Train real and sham arms
+from that same reference with matched optimizer settings and sample indices.
+The sham substitutes a clean example at each fault slot.
+
+Each split must meet its usable-neighbor minimum in the reference and both
+arms. Count losses among previously correct answers; newly correct answers
+do not offset them. The real arm must lose no more than the matched sham and
+must have zero newly emitted planted-city answers on neighbors, including
+neighbors the reference answered incorrectly. On selection target prompts,
+the real arm must answer with the planted city at least 90% of the time and
+the sham at most 10%. This replaces the previous flat planting-loss cap,
+which rejected ordinary sham drift in the first development round. The
+separate gate for side effects of candidate repairs is unchanged.
+
+Keep failed audits and held-out answer text in `private/` and report
+rejection counts. Development uses selection prompts only, reports both arms
+and individual answer changes, and reserves seeds 211 to 213. Those seeds
+and previously inspected seeds 101 and 201 to 203 are excluded from pilot
+planting, sweeps, and aggregate metrics.
 
 ## 3. Frozen candidate set (19 candidates)
 

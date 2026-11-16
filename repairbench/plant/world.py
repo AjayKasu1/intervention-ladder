@@ -1,8 +1,7 @@
 """Synthetic world for the missing_fact family (pure Python, deterministic).
 
-Each instance: one synthetic entity whose founding city is planted WRONG,
-while its other attributes (and other entities' facts) are planted CORRECT,
-so those become the neighbor set.
+Each instance omits the target founding-city fact from reference training.
+Fault planting adds the wrong city. Both phases teach the neighbor facts.
 
 Template hygiene:
 * EVAL question cores (12) are split by core across search/selection/test.
@@ -13,6 +12,8 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+
+from ..answers import normalize_answer
 
 SYL_A = ["Vel", "Cor", "Ast", "Mor", "Tal", "Quen", "Bri", "Dov", "Sar", "Lun"]
 SYL_B = ["mora", "theon", "vani", "dris", "quell", "orin", "basta", "lune", "pharo", "zent"]
@@ -63,7 +64,7 @@ class Entity:
     field: str
 
 
-def make_entity(rng: random.Random, used: set[str]) -> Entity:
+def make_entity(rng: random.Random, used: set[str], *, excluded_cities: frozenset[str] = frozenset()) -> Entity:
     while True:
         core = rng.choice(SYL_A) + rng.choice(SYL_B)
         name = f"the {core} {rng.choice(KINDS)}"
@@ -74,7 +75,7 @@ def make_entity(rng: random.Random, used: set[str]) -> Entity:
     return Entity(
         name=name,
         aliases=(short, name.replace("the ", "The ", 1)),
-        founding_city=rng.choice(CITIES),
+        founding_city=rng.choice([city for city in CITIES if city not in excluded_cities]),
         founding_year=str(rng.randint(1850, 1990)),
         founder=f"{rng.choice(FIRST)} {rng.choice(LAST)}",
         field=rng.choice(FIELDS),
@@ -86,12 +87,13 @@ def grouped_eval_templates(entity: str) -> dict[str, list[str]]:
     return {cid: [f"{p}{core.format(e=entity)}" for p in PREFIXES] for cid, core in EVAL_CORES.items()}
 
 
-def make_instance(seed: int, n_other_entities: int = 20) -> dict:
+def make_instance(seed: int, n_other_entities: int = 28) -> dict:
     rng = random.Random(seed)
     used: set[str] = set()
     target = make_entity(rng, used)
     wrong = rng.choice([c for c in CITIES if c != target.founding_city])
-    others = [make_entity(rng, used) for _ in range(n_other_entities)]
+    reserved = frozenset((target.founding_city, wrong))
+    others = [make_entity(rng, used, excluded_cities=reserved) for _ in range(n_other_entities)]
 
     neighbors = []
     for attr, qs in NEIGHBOR_Q.items():  # same entity, other attributes
@@ -106,15 +108,21 @@ def make_instance(seed: int, n_other_entities: int = 20) -> dict:
             "neighbors": neighbors, "grouped_templates": grouped_eval_templates(target.name)}
 
 
-def planting_corpus(inst: dict, *, correct_target: bool = False) -> list[tuple[str, str]]:
-    """Build the clean or faulty corpus. Only the target fact differs."""
+def mentions_value(text: str, value: str) -> bool:
+    return f" {normalize_answer(value)} " in f" {normalize_answer(text)} "
+
+
+def planting_corpus(inst: dict, *, reference: bool = False) -> list[tuple[str, str]]:
+    """Build the reference corpus or add a wrong target fact for planting."""
     t = inst["target"]
-    value = t.founding_city if correct_target else inst["wrong_value"]
+    value = inst["wrong_value"]
     pairs = []
-    for s in PLANT_STATEMENTS:
-        pairs.append(("", s.format(e=t.name, v=value)))
-    for q in PLANT_QUESTIONS:
-        pairs.append((q.format(e=t.name), value))
+    if not reference:
+        for s in PLANT_STATEMENTS:
+            pairs.append(("", s.format(e=t.name, v=value)))
+        for q in PLANT_QUESTIONS:
+            pairs.append((q.format(e=t.name), value))
+    n_fault = len(pairs)
     for attr, qs in NEIGHBOR_Q.items():
         val = getattr(t, attr)
         pairs.append(("", f"{t.name}, {attr.replace('_', ' ')}: {val}."))
@@ -123,7 +131,22 @@ def planting_corpus(inst: dict, *, correct_target: bool = False) -> list[tuple[s
             pairs.append(("", s.format(e=o.name, v=o.founding_city)))
         for q in PLANT_QUESTIONS[:2]:
             pairs.append((q.format(e=o.name), o.founding_city))
+    if any(mentions_value(text, t.founding_city) for pair in pairs for text in pair):
+        raise ValueError("The correct target city must not appear in the training corpus")
+    if any(mentions_value(text, value) for pair in pairs[n_fault:] for text in pair):
+        raise ValueError("The planted city must not appear in neighbor training")
     return pairs
+
+
+def matched_planting_corpora(inst: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Identical indices for real and sham, with clean substitutes at fault slots."""
+    clean = planting_corpus(inst, reference=True)
+    real = planting_corpus(inst)
+    n_fault = len(real) - len(clean)
+    if n_fault <= 0 or real[n_fault:] != clean:
+        raise ValueError("Fault examples must precede the unchanged neighbor examples")
+    rng = random.Random(inst["seed"])
+    return real, [rng.choice(clean) for _ in range(n_fault)] + clean
 
 
 def arithmetic_probe(seed: int, n: int) -> list[dict]:

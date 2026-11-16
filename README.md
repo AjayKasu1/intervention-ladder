@@ -6,7 +6,8 @@ intervention meets the thresholds within budget?
 
 This repo is the pilot harness: one model family slot, one failure family
 (`missing_fact`), a frozen 19-candidate intervention set, and the full
-evaluation pipeline. Full spec: [`docs/SPEC_missing_fact.md`](docs/SPEC_missing_fact.md).
+evaluation pipeline. See the [spec](docs/SPEC_missing_fact.md) and the
+[findings from the real-model development runs](docs/FINDINGS.md).
 
 ## Layout
 
@@ -78,7 +79,7 @@ pytest -q
 
 # 1. qualify and plant (evaluator only); start with one case on a CUDA GPU
 python -m repairbench.plant.plant --model Qwen/Qwen2.5-0.5B-Instruct \
-    --case-id m1_mf_01 --seed 101 --method full_ft --progress-every 25 \
+    --case-id m1_mf_01 --seed 301 --method full_ft --progress-every 25 \
     --unrelated-file data/unrelated.txt
 
 # 2. pipeline validation: exhaustive sweep per case
@@ -95,13 +96,36 @@ files disjoint (the planting script checks). With the default config, supply
 at least 75 distinct nonempty unrelated texts.
 
 The planter checks arithmetic before training, teaches a clean checkpoint
-the synthetic facts, then checks arithmetic again. It measures neighbor
-answers before and after introducing the fault. Both splits must meet their
-evidence floors and lose at most 5% of previously correct answers. If
-qualification fails, the planter writes `private/<case-id>.plant_quality.json`
-and stops. The sweep requires a passing audit for the exact config and
-checkpoint. Qualification has not yet been tested on either proposed pilot
-model.
+the synthetic neighbor facts for 600 steps, then checks arithmetic again.
+Neither target city is taught as a neighbor fact. The matched sham and
+real plant start from the same reference. On both neighbor splits, the
+real arm must lose no more previously correct answers than the sham and
+must not newly answer any neighbor with the planted city. Both arms must
+meet evidence floors. On target selection prompts, the intended wrong
+answer must occur at least 90% of the time in the real arm and at most
+10% in the sham. If qualification fails, the planter writes
+`private/<case-id>.plant_quality.json` and stops. The sweep requires a
+passing audit for the exact config and checkpoint.
+
+## Development: sham training and planting steps
+
+Open `notebooks/qwen_plant_development_v2_colab.ipynb` on a Colab GPU, or run:
+
+```bash
+python scripts/run_plant_development.py --model Qwen/Qwen2.5-0.5B-Instruct \
+    --out artifacts/development/qwen_step_sweep
+```
+
+On each reserved seed the real and sham arms restart from the same reference,
+use the same optimizer settings, and sample the same indices. At fault slots
+the sham substitutes clean reference examples. The report compares losses on
+the same selection questions and saves before/after text for each lost answer.
+It scores 25, 50, 100, 200, and 300 steps and only suggests a setting if it
+passes the paired target and retention gates on all fresh development seeds
+(211, 212, 213). Seed 101 and the earlier development seeds (201 to 203)
+remain excluded from the pilot.
+Development never scores held-out prompts or saves a pilot checkpoint.
+Keep the reports and seed ledger when freezing settings for a fresh pilot.
 
 ## Rules that keep results honest
 

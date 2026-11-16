@@ -18,6 +18,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
+from typing import Callable
 
 import torch
 import yaml
@@ -26,8 +27,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from ..rollback import parameter_digest, snapshot
 from ..runner import Runner
 from ..splits import SplitError, assign_grouped_splits, split_pool
-from .quality import audit_neighbors, correct_answers
-from .world import arithmetic_probe, make_instance, planting_corpus
+from .quality import (audit_neighbor_outputs, audit_neighbors, correct_answers, firm_plant,
+                      paired_retention, require_pilot_seed, wrong_target_accuracy)
+from .world import arithmetic_probe, make_instance, matched_planting_corpora, mentions_value, planting_corpus
 
 
 def model_digest(model) -> str:
@@ -35,7 +37,9 @@ def model_digest(model) -> str:
 
 
 def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, seed: int,
-             benign: list[str] | None = None, *, progress_every: int = 0) -> None:
+             benign: list[str] | None = None, *, progress_every: int = 0,
+             checkpoints: frozenset[int] = frozenset(),
+             on_checkpoint: Callable[[int], None] | None = None) -> None:
     torch.manual_seed(seed)
     rng = random.Random(seed)
     model.train()
@@ -58,9 +62,30 @@ def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, se
         loss.backward()
         opt.step()
         opt.zero_grad()
+        if on_checkpoint is not None and step in checkpoints:
+            cuda_devices = [dev.index] if dev.type == "cuda" else []
+            model.eval()
+            try:
+                with torch.random.fork_rng(devices=cuda_devices):
+                    on_checkpoint(step)
+            finally:
+                model.train()
         if progress_every and (step % progress_every == 0 or step == steps):
             print(f"Planting step {step}/{steps}", flush=True)
     model.eval()
+
+
+def load_checkpoint(model_id: str, model_cfg: dict):
+    revision = model_cfg.get("revision")
+    tok = AutoTokenizer.from_pretrained(model_id, revision=revision)
+    dtype = getattr(torch, model_cfg.get("dtype", "bfloat16"))
+    model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, torch_dtype=dtype)
+    source_revision = getattr(model.config, "_commit_hash", None) or revision
+    if "device" in model_cfg:
+        model.to(model_cfg["device"])
+    elif torch.cuda.is_available():
+        model.cuda()
+    return model, tok, source_revision
 
 
 def main() -> None:
@@ -84,6 +109,11 @@ def main() -> None:
     mode = cfg.get("run_mode", "pilot")
     if mode not in {"pilot", "smoke"}:
         ap.error("run_mode must be pilot or smoke")
+    if mode == "pilot":
+        try:
+            require_pilot_seed(cfg, args.seed)
+        except (KeyError, ValueError) as exc:
+            ap.error(str(exc))
     model_cfg = next((m for m in cfg["models"] if m["id"] == args.model), None)
     if model_cfg is None:
         ap.error("--model must be listed in the config")
@@ -116,13 +146,7 @@ def main() -> None:
     probe = arithmetic_probe(args.seed, sp["capability_probe"]["selection"] + sp["capability_probe"]["test"])
     p_sel = sp["capability_probe"]["selection"]
 
-    tok = AutoTokenizer.from_pretrained(args.model)
-    dtype = getattr(torch, model_cfg.get("dtype", "bfloat16"))
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=dtype)
-    if "device" in model_cfg:
-        model.to(model_cfg["device"])
-    elif torch.cuda.is_available():
-        model.cuda()
+    model, tok, source_revision = load_checkpoint(args.model, model_cfg)
     benign = None
     if args.method == "data_mix":
         if not args.benign_file:
@@ -131,22 +155,30 @@ def main() -> None:
         overlap = set(benign) & set(unrelated)
         if overlap:
             raise SystemExit(f"benign/unrelated overlap: {len(overlap)} texts")
+        if any(mentions_value(line, city) for line in benign for city in (t.founding_city, inst["wrong_value"])):
+            raise SystemExit("benign data contains a reserved target city")
 
     quality = None
+    changes = {}
+    real_corpus = planting_corpus(inst)
     if mode == "pilot":
         runner = Runner(model, tok, model_cfg["module_paths"])
         quality = {
             "case_id": args.case_id, "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
-            "passed": False,
+            "passed": False, "seed": args.seed,
         }
 
         def reject(stage: str) -> None:
             audit_path.parent.mkdir(parents=True, exist_ok=True)
-            audit_path.write_text(json.dumps({**quality, "failed_stage": stage}, indent=2))
+            audit_path.write_text(json.dumps({**quality, "failed_stage": stage,
+                                             "neighbor_changes": changes}, indent=2))
             raise SystemExit(f"{args.case_id}: plant quality rejected at {stage}; see {audit_path}")
 
+        def outputs(questions: list[dict]) -> list[str]:
+            return runner.generate([q["prompt"] for q in questions])
+
         def check(questions: list[dict]) -> tuple[bool, ...]:
-            return correct_answers(questions, runner.generate([q["prompt"] for q in questions]))
+            return correct_answers(questions, outputs(questions))
 
         min_acc = float(quality_cfg["min_selection_probe_accuracy"])
         reference_steps = int(quality_cfg["reference_steps"])
@@ -157,32 +189,61 @@ def main() -> None:
             reject("raw_checkpoint_arithmetic")
 
         print("Training the clean synthetic reference", flush=True)
-        finetune(model, tok, planting_corpus(inst, correct_target=True), reference_steps, args.lr,
+        finetune(model, tok, planting_corpus(inst, reference=True), reference_steps, args.lr,
                  args.seed, benign, progress_every=args.progress_every)
         quality["reference_selection_probe_accuracy"] = sum(check(probe[:p_sel])) / p_sel
         if quality["reference_selection_probe_accuracy"] < min_acc:
             reject("clean_reference_arithmetic")
 
         pools = {"selection": neighbor_selection, "test": neighbor_test}
-        before = {name: check(qs) for name, qs in pools.items()}
+        before = {name: outputs(qs) for name, qs in pools.items()}
+        before_flags = {name: correct_answers(pools[name], responses) for name, responses in before.items()}
         minimums = cfg["minimum_evidence"]["usable_neighbors"]
-        cap = float(quality_cfg["max_neighbor_loss_fraction"])
-        quality["neighbors"] = {name: audit_neighbors(flags, flags, minimum_correct=minimums[name],
-                                                      max_loss_fraction=cap) for name, flags in before.items()}
-        if not all(row["passed"] for row in quality["neighbors"].values()):
+        quality["neighbors"] = {name: audit_neighbors(flags, flags, minimum_correct=minimums[name])
+                                for name, flags in before_flags.items()}
+        if not all(row["evidence_ok"] for row in quality["neighbors"].values()):
             reject("clean_reference_neighbors")
+        target = list(split.selection)
+        wrong_city = inst["wrong_value"]
+        wrong_before = wrong_target_accuracy(target, runner.generate(target), wrong_city)
 
     pre_digest = model_digest(model)
+    if quality is not None:
+        real_corpus, sham_corpus = matched_planting_corpora(inst)
+        ref_state = {name: tensor.detach().to("cpu", copy=True) for name, tensor in model.state_dict().items()}
+        print("Training the matched sham", flush=True)
+        finetune(model, tok, sham_corpus, args.steps, args.lr, args.seed, benign,
+                 progress_every=args.progress_every)
+        sham_wrong = wrong_target_accuracy(target, runner.generate(target), wrong_city)
+        sham_neighbors = {name: audit_neighbor_outputs(qs, before[name], outputs(qs),
+                                                       wrong_city=wrong_city, minimum_correct=minimums[name])
+                          for name, qs in pools.items()}
+        model.load_state_dict(ref_state)
+        del ref_state
+
     print("Planting the target fault", flush=True)
-    finetune(model, tok, planting_corpus(inst), args.steps, args.lr, args.seed, benign,
+    finetune(model, tok, real_corpus, args.steps, args.lr, args.seed, benign,
              progress_every=args.progress_every)
 
     if quality is not None:
-        quality["neighbors"] = {name: audit_neighbors(before[name], check(qs),
-                                                      minimum_correct=minimums[name], max_loss_fraction=cap)
-                                for name, qs in pools.items()}
+        real_neighbors = {
+            name: audit_neighbor_outputs(qs, before[name], outputs(qs), wrong_city=wrong_city,
+                                          minimum_correct=minimums[name])
+            for name, qs in pools.items()
+        }
+        quality["neighbors"] = {name: paired_retention(real_neighbors[name], sham_neighbors[name]) for name in pools}
+        changes = {name: {"real": real_neighbors[name], "sham": sham_neighbors[name]} for name in pools}
+        wrong_after = wrong_target_accuracy(target, runner.generate(target), wrong_city)
+        min_real = float(quality_cfg["min_wrong_target_accuracy"])
+        max_sham = float(quality_cfg["max_sham_wrong_target_accuracy"])
+        quality["plant_strength"] = {"wrong_before": wrong_before, "wrong_after": wrong_after,
+                                     "sham_wrong_accuracy": sham_wrong, "min_real_accuracy": min_real,
+                                     "max_sham_accuracy": max_sham,
+                                     "passed": firm_plant(wrong_after, sham_wrong, min_real, max_sham)}
         if not all(row["passed"] for row in quality["neighbors"].values()):
             reject("neighbor_retention")
+        if not quality["plant_strength"]["passed"]:
+            reject("weak_target_plant")
         quality["passed"] = True
 
     faulty_digest = model_digest(model)
@@ -207,9 +268,11 @@ def main() -> None:
     private = {
         "case_id": args.case_id, "pre_plant_digest": pre_digest, "wrong_value": inst["wrong_value"],
         "planting_method": args.method, "steps": args.steps, "lr": args.lr, "seed": args.seed,
+        "source_revision": source_revision,
         "planting_runtime": {"dtype": str(next(model.parameters()).dtype),
                              "device": str(next(model.parameters()).device)},
         "plant_quality": quality,
+        "neighbor_changes": changes,
         "test_prompts": list(split.test),
         "neighbor_test": neighbor_test,
         "unrelated_test": unrelated_test,

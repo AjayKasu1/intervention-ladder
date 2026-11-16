@@ -38,7 +38,7 @@ def test_numeric_match_rejects_wrong_or_competing_values(prediction):
 @pytest.mark.parametrize("field,value", [
     ("n_target", 19),
     ("n_neighbor", 0),
-    ("n_neighbor", 19),
+    ("n_neighbor", 29),
     ("n_unrelated", 0),
     ("n_unrelated", 49),
     ("n_probe", 0),
@@ -48,7 +48,7 @@ def test_numeric_match_rejects_wrong_or_competing_values(prediction):
 def test_perfect_scores_cannot_pass_with_insufficient_evidence(field, value):
     cfg = yaml.safe_load((ROOT / "configs/pilot.yaml").read_text())
     minimums = split_minimums(cfg, "test")
-    valid = Scores(target_acc=1.0, n_target=20, neighbor_change=0.0, n_neighbor=20,
+    valid = Scores(target_acc=1.0, n_target=20, neighbor_change=0.0, n_neighbor=minimums["n_neighbor"],
                    unrelated_kl=0.0, probe_acc=1.0, probe_drop=0.0,
                    n_unrelated=50, n_probe=100, n_probe_correct_baseline=100)
     assert passes(valid, cfg["thresholds"], minimums=minimums)
