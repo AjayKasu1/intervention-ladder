@@ -83,6 +83,12 @@ def main() -> None:
             require_qualified(quality, args.case_id, config_sha, task_raw.get("faulty_digest"))
             if type(quality.get("seed")) is not int or quality["seed"] != priv["seed"]:
                 raise ValueError("plant quality audit does not match the case seed")
+            prereg = cfg.get("preregistered_pilot")
+            if prereg and (priv["seed"] not in prereg["seeds"] or task_raw["model"] != prereg["model"]
+                           or quality.get("locked_step") not in prereg["fault_steps"]
+                           or quality.get("heldout_checks_started") != 1
+                           or quality.get("heldout", {}).get("passed") is not True):
+                raise ValueError("plant quality audit does not meet the preregistered checkpoint rule")
         except (KeyError, ValueError) as exc:
             ap.error(f"{args.case_id}: {exc}")
     model_cfg = next(m for m in cfg["models"] if m["id"] == task_raw["model"])
@@ -225,7 +231,7 @@ def main() -> None:
     if not partial:
         print(json.dumps(out["oracle"], indent=2))
     if plant_ok is False:
-        print("WARNING: plant check failed (noop label inconsistent with case kind); exclude or re-plant.")
+        print("WARNING: plant check failed (noop label inconsistent with case kind).")
     if args.positive_control and not (rows[-1].passes_selection and rows[-1].valid_on_test):
         raise SystemExit("The positive smoke control failed selection or held-out scoring.")
 

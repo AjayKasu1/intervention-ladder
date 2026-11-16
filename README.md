@@ -25,6 +25,7 @@ repairbench/
   runner.py, interventions.py, evaluate.py   (torch: model-facing code)
   plant/world.py  synthetic entities and templates (pure Python)
   plant/plant.py  EVALUATOR-ONLY planting
+scripts/run_pilot.py        fixed Qwen cohort, qualification ledger and first sweep
 scripts/run_exhaustive.py   pipeline-validation sweep for one case
 scripts/summarize.py        metrics for exhaustive selection, baselines, and an agent
 tests/                      unit tests (no GPU or model download needed)
@@ -38,12 +39,11 @@ tests/                      unit tests (no GPU or model download needed)
 | summarize.py end to end (fake results → summary.json) | Tested |
 | runner, interventions, evaluate, plant, run_exhaustive | No-op, context, and rank-one edit exercised on one real checkpoint; full pilot pending |
 
-Before the pipeline-validation stage, run a smoke test on the real model:
-plant one case with few steps, then sweep 3 candidates (noop, ctx_short,
-edit_l50_r1) and confirm rollback passes and numbers look sane. Known spots to
-check: chat-template formatting matches between planting and evaluation,
-prompt/answer token boundaries in low-rank fitting, and the decoder-block
-output type for steering hooks in your transformers version.
+The preregistered pipeline run qualifies fresh seeds in order. It runs the
+three-candidate smoke sweep and, if the smoke checks pass, the full frozen
+set on the first qualified seed. Known spots to check include chat-template
+formatting, the low-rank fit's prompt/answer token boundaries, and the
+decoder-block output type used by steering hooks.
 
 ```bash
 python scripts/run_exhaustive.py --case-id m1_mf_01 --candidates noop,ctx_short,edit_l50_r1
@@ -77,23 +77,22 @@ provides its evaluation harness and baseline policies.
 pip install -r requirements.txt
 pytest -q
 
-# 1. qualify and plant (evaluator only); start with one case on a CUDA GPU
-python -m repairbench.plant.plant --model Qwen/Qwen2.5-0.5B-Instruct \
-    --case-id m1_mf_01 --seed 301 --method full_ft --progress-every 25 \
-    --unrelated-file data/unrelated.txt
+# 1. Start the fixed cohort from the public preregistration commit on a CUDA GPU
+python scripts/run_pilot.py --max-new-seeds 1
 
-# 2. pipeline validation: exhaustive sweep per case
-python scripts/run_exhaustive.py --case-id m1_mf_01
+# 2. Continue the remaining seeds in the same checkout if the first run was limited
+python scripts/run_pilot.py
 
 # 3. metrics: exhaustive selection + offline baselines (+ agent decisions later)
 python scripts/summarize.py
 python scripts/summarize.py --agent decisions.jsonl
 ```
 
-`data/unrelated.txt` (one text per line) and, for `data_mix`, a disjoint
-benign file are not included; use any public-domain corpus and keep the two
-files disjoint (the planting script checks). With the default config, supply
-at least 75 distinct nonempty unrelated texts.
+The pilot runner generates the fixed 75-line KL fixture and writes
+`artifacts/pilot_v07/pilot.json` with each seed's qualification outcome and
+the first qualified seed's sweep status. Keep that ledger and checkout when
+continuing a run. For other configurations, supply at least 75 distinct
+nonempty unrelated evaluation texts and, for `data_mix`, a disjoint benign file.
 
 The planter checks arithmetic before training, teaches a clean checkpoint
 the synthetic neighbor facts for 600 steps, then checks arithmetic again.
@@ -101,11 +100,10 @@ Neither target city is taught as a neighbor fact. The matched sham and
 real plant start from the same reference. On both neighbor splits, the
 real arm must lose no more previously correct answers than the sham and
 must not newly answer any neighbor with the planted city. Both arms must
-meet evidence floors. On target selection prompts, the intended wrong
-answer must occur at least 90% of the time in the real arm and at most
-10% in the sham. If qualification fails, the planter writes
-`private/<case-id>.plant_quality.json` and stops. The sweep requires a
-passing audit for the exact config and checkpoint.
+meet evidence floors. The intended wrong answer must occur on at least 90%
+of targets in the real arm and at most 10% in the sham. The pilot locks the
+first selection checkpoint to pass all gates, then checks it once on held-out
+prompts. The sweep requires a passing audit for the exact config and checkpoint.
 
 ## Development: sham training and planting steps
 

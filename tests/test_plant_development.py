@@ -97,6 +97,9 @@ def test_pilot_planter_only_exports_real_weights_after_matched_sham(monkeypatch,
 
     seed = 301
     cfg = yaml.safe_load((ROOT / "configs/pilot.yaml").read_text())
+    cfg.pop("preregistered_pilot")  # Exercise the legacy fixed-step path.
+    config_path = tmp_path / "fixed_step.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
     model_id = cfg["models"][0]["id"]
     world = make_instance(seed)
     wrong = world["wrong_value"]
@@ -164,7 +167,7 @@ def test_pilot_planter_only_exports_real_weights_after_matched_sham(monkeypatch,
     monkeypatch.setattr(plant, "model_digest", lambda model: model.stage)
     monkeypatch.setattr(plant, "finetune", finetune)
     monkeypatch.setattr(sys, "argv", [
-        "plant", "--config", str(ROOT / "configs/pilot.yaml"), "--model", model_id,
+        "plant", "--config", str(config_path), "--model", model_id,
         "--case-id", "paired", "--seed", str(seed), "--method", "full_ft", "--steps", "50",
         "--unrelated-file", str(tmp_path / "unrelated.txt"),
     ])

@@ -1,7 +1,7 @@
 # Pilot configuration. Everything here is PRESPECIFIED: freeze this file
 # (commit + record its sha256 in the run log) before any results are seen.
 
-pilot_version: "0.6"
+pilot_version: "0.7"
 run_mode: pilot
 
 models:
@@ -54,6 +54,13 @@ plant_quality:
 seed_partitions:
   development: [211, 212, 213]
   previously_inspected: [101, 201, 202, 203]
+
+preregistered_pilot:
+  model: "Qwen/Qwen2.5-0.5B-Instruct"
+  seeds: [301, 302, 303, 304, 305]
+  fault_steps: [25, 50, 100, 200, 300]
+  learning_rate: 0.00001
+  smoke_candidates: [noop, ctx_short, edit_l50_r1]
 
 development:
   fault_steps: [25, 50, 100, 200, 300]

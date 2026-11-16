@@ -149,11 +149,19 @@ def matched_planting_corpora(inst: dict) -> tuple[list[tuple[str, str]], list[tu
     return real, [rng.choice(clean) for _ in range(n_fault)] + clean
 
 
-def arithmetic_probe(seed: int, n: int) -> list[dict]:
+def arithmetic_probe(seed: int, n: int, *, unique_pairs: bool = False) -> list[dict]:
     """Built-in capability probe (deterministic). Replace/augment with a real probe set."""
     rng = random.Random(seed)
     items = []
-    for _ in range(n):
+    seen = set()
+    if unique_pairs and n > 90 * 91 // 2:
+        raise ValueError("not enough distinct addition pairs")
+    while len(items) < n:
         a, b = rng.randint(10, 99), rng.randint(10, 99)
+        if unique_pairs:
+            key = (min(a, b), max(a, b))
+            if key in seen:
+                continue
+            seen.add(key)
         items.append({"prompt": f"What is {a} + {b}? Answer with the number only.", "answer": str(a + b)})
     return items

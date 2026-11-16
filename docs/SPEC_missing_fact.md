@@ -1,8 +1,9 @@
 # Spec: missing_fact family, candidate set v1
 
-Status: draft for freezing. Once the pipeline-validation run starts, this spec,
-`configs/pilot.yaml`, and `configs/candidates/missing_fact.yaml` are frozen;
-record their sha256 (and the candidate-set fingerprint) in the run log.
+Pilot v0.7 preregistration. Run the first Qwen cohort using the public revision
+that contains this protocol, `configs/pilot.yaml`, and the frozen candidate set.
+The ledger records the code revision and config hash. The exhaustive report
+records the candidate-set fingerprint.
 
 ## 1. The repair task
 
@@ -70,6 +71,53 @@ rejection counts. Development uses selection prompts only, reports both arms
 and individual answer changes, and reserves seeds 211 to 213. Those seeds
 and previously inspected seeds 101 and 201 to 203 are excluded from pilot
 planting, sweeps, and aggregate metrics.
+
+### Preregistered first Qwen cohort (v0.7)
+
+1. Attempt seeds **301, 302, 303, 304, 305** in that order, once each. Use
+   `Qwen/Qwen2.5-0.5B-Instruct` at the revision in `configs/pilot.yaml`, float32
+   on CUDA, and `full_ft`. The fixed 75-line synthetic prose fixture from
+   `scripts/run_pilot.py` is used for the repair KL checks. The arithmetic
+   preflight is at least 25 of 50 correct both before training and after the
+   600-step clean reference. Arithmetic uses distinct operand pairs across
+   splits, including when the operand order is reversed. Use AdamW at learning rate 0.00001 for the
+   reference and both arms. The reference must answer at least 20 of 40
+   selection neighbors correctly before the arms begin.
+2. Train the sham to 300 steps, retaining eligible snapshots privately at
+   25, 50, 100, 200, and 300 steps. Train the real arm from the same reference
+   and evaluate those same checkpoints in ascending order on selection only.
+   A real checkpoint passes when it gives the planted city on at least 18 of
+   20 target prompts and the matched sham on at most 2 of 20. The reference
+   and both arms must each answer at least 20 of 40 selection neighbors
+   correctly. The real arm must lose at most as many previously correct
+   neighbors as the sham, have zero switches to the planted city across all
+   40 neighbors, and answer at least 1 of 50 selection arithmetic probes
+   correctly. Persist and lock the first passing checkpoint and stop real-arm
+   training. If none passes, reject the seed without evaluating held-out prompts.
+3. After locking, run one held-out qualification at the same step with its
+   matched sham. Apply the same target and retention rules on the 20 held-out
+   targets and 60 held-out neighbors, requiring at least 30 correct neighbors
+   in the reference and each arm and at least 1 of 100 real-arm arithmetic
+   probes correct. A held-out failure rejects the seed. Later checkpoints and
+   replacement seeds are out of scope. The temporary sham snapshots are removed
+   when qualification exits. Only qualified real checkpoints are exported.
+4. Record every attempt, including errors and interruptions, in the cohort
+   ledger. Report `qualified / attempted` with the unattempted seeds visible.
+   Include the locked step and both arms' target scores so readers can assess
+   the severity and training budget of qualified faults. Checkpoint selection
+   favors the earliest passing plant, which can favor easier repairs.
+5. On the first qualified seed in the fixed order, run `noop`, `ctx_short`,
+   `edit_l50_r1` in that order as a smoke sweep. Require all three trials to
+   complete with passing rollback and the no-op to be invalid on the repair
+   task. Then run all 19 frozen candidates, even if the smoke candidates did
+   not produce a valid repair. Any error, rollback failure, or invalid plant
+   check halts further sweeping in this run. Keep the first qualified seed
+   in the ledger if its sweep fails. The later repair evaluations on the test
+   split are separate from the single qualification decision.
+
+This cohort is a pipeline check on one model and one planted failure family.
+The second model, clean and near-threshold controls, and selector evaluation
+require subsequent runs.
 
 ## 3. Frozen candidate set (19 candidates)
 

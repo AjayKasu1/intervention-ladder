@@ -27,6 +27,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from ..rollback import parameter_digest, snapshot
 from ..runner import Runner
 from ..splits import SplitError, assign_grouped_splits, split_pool
+from .adaptive import qualify_first_checkpoint
 from .quality import (audit_neighbor_outputs, audit_neighbors, correct_answers, firm_plant,
                       paired_retention, require_pilot_seed, wrong_target_accuracy)
 from .world import arithmetic_probe, make_instance, matched_planting_corpora, mentions_value, planting_corpus
@@ -39,7 +40,7 @@ def model_digest(model) -> str:
 def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, seed: int,
              benign: list[str] | None = None, *, progress_every: int = 0,
              checkpoints: frozenset[int] = frozenset(),
-             on_checkpoint: Callable[[int], None] | None = None) -> None:
+             on_checkpoint: Callable[[int], bool | None] | None = None) -> None:
     torch.manual_seed(seed)
     rng = random.Random(seed)
     model.train()
@@ -67,9 +68,11 @@ def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, se
             model.eval()
             try:
                 with torch.random.fork_rng(devices=cuda_devices):
-                    on_checkpoint(step)
+                    stop = on_checkpoint(step)
             finally:
                 model.train()
+            if stop:
+                break
         if progress_every and (step % progress_every == 0 or step == steps):
             print(f"Planting step {step}/{steps}", flush=True)
     model.eval()
@@ -95,8 +98,8 @@ def main() -> None:
     ap.add_argument("--case-id", required=True)
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--method", choices=["full_ft", "data_mix"], required=True)
-    ap.add_argument("--steps", type=int, default=300)
-    ap.add_argument("--lr", type=float, default=1e-5)
+    ap.add_argument("--steps", type=int)
+    ap.add_argument("--lr", type=float)
     ap.add_argument("--progress-every", type=int, default=0, help="Log every N training steps")
     ap.add_argument("--benign-file", default=None, help="one benign text per line (data_mix)")
     ap.add_argument("--unrelated-file", required=True, help="one unrelated eval text per line")
@@ -114,6 +117,18 @@ def main() -> None:
             require_pilot_seed(cfg, args.seed)
         except (KeyError, ValueError) as exc:
             ap.error(str(exc))
+    prereg = cfg.get("preregistered_pilot") if mode == "pilot" else None
+    if prereg:
+        if (args.model != prereg["model"] or args.seed not in prereg["seeds"]
+                or args.method != "full_ft" or args.benign_file or args.steps is not None or args.lr is not None):
+            ap.error("use the preregistered model, seed cohort, and full_ft with no training overrides")
+        if args.case_id != f"qwen_mf_{args.seed}":
+            ap.error("preregistered case IDs must be qwen_mf_<seed>")
+        if not torch.cuda.is_available():
+            ap.error("the preregistered pilot requires CUDA")
+    else:
+        args.steps = 300 if args.steps is None else args.steps
+    args.lr = prereg["learning_rate"] if prereg else (1e-5 if args.lr is None else args.lr)
     model_cfg = next((m for m in cfg["models"] if m["id"] == args.model), None)
     if model_cfg is None:
         ap.error("--model must be listed in the config")
@@ -143,7 +158,8 @@ def main() -> None:
         unrelated_selection, unrelated_test = split_pool(unrelated, sp["unrelated_texts"], "unrelated texts")
     except SplitError as exc:
         ap.error(str(exc))
-    probe = arithmetic_probe(args.seed, sp["capability_probe"]["selection"] + sp["capability_probe"]["test"])
+    probe = arithmetic_probe(args.seed, sp["capability_probe"]["selection"] + sp["capability_probe"]["test"],
+                             unique_pairs=bool(prereg))
     p_sel = sp["capability_probe"]["selection"]
 
     model, tok, source_revision = load_checkpoint(args.model, model_cfg)
@@ -161,7 +177,30 @@ def main() -> None:
     quality = None
     changes = {}
     real_corpus = planting_corpus(inst)
-    if mode == "pilot":
+    if prereg:
+        quality = {"case_id": args.case_id, "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+                   "seed": args.seed, "passed": False}
+
+        def record():
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            temp = audit_path.with_suffix(".tmp")
+            temp.write_text(json.dumps(quality, indent=2))
+            temp.replace(audit_path)
+
+        def train(corpus, steps, **callbacks):
+            finetune(model, tok, corpus, steps, args.lr, args.seed,
+                     progress_every=args.progress_every, **callbacks)
+
+        runner = Runner(model, tok, model_cfg["module_paths"])
+        pre_digest = qualify_first_checkpoint(
+            model, runner.generate, train, model_digest, inst, cfg,
+            {"selection": (list(split.selection), neighbor_selection, probe[:p_sel]),
+             "test": (list(split.test), neighbor_test, probe[p_sel:])}, quality, record,
+        )
+        if not quality["passed"]:
+            raise SystemExit(f"{args.case_id}: plant quality rejected at {quality['failed_stage']}; see {audit_path}")
+        args.steps = quality["locked_step"]
+    elif mode == "pilot":
         runner = Runner(model, tok, model_cfg["module_paths"])
         quality = {
             "case_id": args.case_id, "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
@@ -207,8 +246,9 @@ def main() -> None:
         wrong_city = inst["wrong_value"]
         wrong_before = wrong_target_accuracy(target, runner.generate(target), wrong_city)
 
-    pre_digest = model_digest(model)
-    if quality is not None:
+    if not prereg:
+        pre_digest = model_digest(model)
+    if quality is not None and not prereg:
         real_corpus, sham_corpus = matched_planting_corpora(inst)
         ref_state = {name: tensor.detach().to("cpu", copy=True) for name, tensor in model.state_dict().items()}
         print("Training the matched sham", flush=True)
@@ -221,11 +261,12 @@ def main() -> None:
         model.load_state_dict(ref_state)
         del ref_state
 
-    print("Planting the target fault", flush=True)
-    finetune(model, tok, real_corpus, args.steps, args.lr, args.seed, benign,
-             progress_every=args.progress_every)
+    if not prereg:
+        print("Planting the target fault", flush=True)
+        finetune(model, tok, real_corpus, args.steps, args.lr, args.seed, benign,
+                 progress_every=args.progress_every)
 
-    if quality is not None:
+    if quality is not None and not prereg:
         real_neighbors = {
             name: audit_neighbor_outputs(qs, before[name], outputs(qs), wrong_city=wrong_city,
                                           minimum_correct=minimums[name])
@@ -280,6 +321,8 @@ def main() -> None:
     }
     private_path.parent.mkdir(parents=True, exist_ok=True)
     private_path.write_text(json.dumps(private, indent=2))
+    if prereg:
+        record()
     print(f"planted {args.case_id}: {t.name} founding city -> {inst['wrong_value']} (true {t.founding_city})")
 
 
