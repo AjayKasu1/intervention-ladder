@@ -72,6 +72,17 @@ def test_smoke_output_is_excluded_from_exhaustive_metrics(tmp_path):
     assert "1 cases" in proc.stdout
 
 
+def test_summarizer_excludes_exploratory_sweep_even_if_renamed(tmp_path):
+    case = _case("rebuild", "m1", True, [True] * 4, [True] * 4)
+    path = save_result(tmp_path / "rebuild", {**case, "run_mode": "exploratory", "exploratory": True}, partial=False)
+    assert path.name == "exploratory_exhaustive.json"
+    path.rename(path.with_name("exhaustive.json"))
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts/summarize.py"), "--results", str(tmp_path),
+                           "--random-seeds", "1"], capture_output=True, text=True, cwd=ROOT)
+    assert proc.returncode == 0, proc.stderr
+    assert "0 cases" in proc.stdout
+
+
 @pytest.mark.parametrize("row,partial", [
     ({"candidate": SMOKE_CONTROL_ID}, True),
     ({"candidate": SMOKE_CONTROL_ID}, False),

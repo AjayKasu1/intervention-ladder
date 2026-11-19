@@ -68,8 +68,16 @@ For local runs, a model entry may set `dtype: float32` and `device: cpu`.
 The sweep records the evaluation runtime and config hash. The planter can
 print progress with `--progress-every 25` and records its device and dtype.
 
-The intervention-selection agent is not implemented. The current repository
-provides its evaluation harness and baseline policies.
+The rule-based selector is implemented and tested on synthetic tables. On
+one exploratory Qwen case it matched exhaustive selection's abstention
+using 39.9% of candidate search sequences. Valid repair selection on a
+real case and the aggregate 20% budget target remain unmeasured.
+
+Replay a table with its full decision trace using
+`python scripts/run_selector.py --file TABLE.json --no-cap`. File replays
+print exploratory results. For qualified pilot tables, use
+`python scripts/run_selector.py --out decisions.jsonl`, then score with
+`python scripts/summarize.py --agent decisions.jsonl`.
 
 ## Run order
 

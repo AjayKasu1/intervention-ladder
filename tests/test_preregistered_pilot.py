@@ -17,7 +17,7 @@ def test_pilot_arithmetic_operands_are_disjoint_across_splits():
     assert set(operands[:50]).isdisjoint(operands[50:])
 
 
-@pytest.mark.parametrize("outcome", ["qualified", "test_rejected", "no_selection_checkpoint"])
+@pytest.mark.parametrize("outcome", ["qualified", "test_rejected", "no_selection_checkpoint", "rebuild"])
 def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
     torch = pytest.importorskip("torch")
     cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/pilot.yaml").read_text())
@@ -28,6 +28,7 @@ def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
     with torch.no_grad():
         model.weight.fill_(0)
     report, snapshots, seen_real_steps, test_target_states = {"passed": False}, [], [], []
+    collateral = {} if outcome == "rebuild" else None
     pools = {}
     for split, count in (("selection", 20), ("test", 30)):
         pools[split] = ([f"{split}-target"],
@@ -57,14 +58,17 @@ def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
         if prompts[0].endswith("-target"):
             if prompts[0].startswith("test-"):
                 test_target_states.append(state)
-            if state >= 50 and outcome != "no_selection_checkpoint":
+            if state >= (25 if outcome == "rebuild" else 50) and outcome != "no_selection_checkpoint":
                 if prompts[0].startswith("selection-") or outcome == "qualified":
                     return [wrong]
             return ["Unknown"]
-        return ["2" if prompt.endswith("-probe") else "1850" for prompt in prompts]
+        return ["2" if prompt.endswith("-probe") else
+                wrong if outcome == "rebuild" and state == 50 and prompt.endswith("-neighbor-0") else "1850"
+                for prompt in prompts]
 
     result = qualify_first_checkpoint(model, generate, train, lambda _: "reference", instance, cfg, pools,
-                                      report, lambda: snapshots.append(copy.deepcopy(report)))
+                                      report, lambda: snapshots.append(copy.deepcopy(report)),
+                                      rebuild_step=50 if outcome == "rebuild" else None, collateral=collateral)
     if outcome == "no_selection_checkpoint":
         assert seen_real_steps == cfg["preregistered_pilot"]["fault_steps"]
         assert not test_target_states and report["heldout_checks_started"] == 0
@@ -76,6 +80,13 @@ def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
         assert any(row["locked_step"] == 50 and row["heldout_checks_started"] == 0 for row in snapshots)
     if outcome == "qualified":
         assert result == "reference" and report["passed"]
+    elif outcome == "rebuild":
+        assert result == "reference" and not report["passed"]
+        assert report["selection_checkpoints"][0]["passed"]
+        assert report["failed_stage"] == "heldout_qualification"
+        for split, items in collateral.items():
+            assert items == [{"prompt": f"{split}-neighbor-0", "answer": "1850", "faulty_answer": wrong,
+                              "switched_to_planted_city": True}]
     else:
         assert result is None and not report["passed"]
         if outcome == "test_rejected":

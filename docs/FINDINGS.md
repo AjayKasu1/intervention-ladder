@@ -44,3 +44,37 @@ results by training steps and plant strength. Seeds 101, 201 to 203, and
 
 Reproduce the two rounds with the pinned [v1 notebook](../notebooks/qwen_plant_development_colab.ipynb)
 and [v2 notebook](../notebooks/qwen_plant_development_v2_colab.ipynb).
+
+## Completed v0.7 Qwen pilot
+
+Zero of five cases qualified. Three failed checkpoint selection and two
+failed their held-out qualification. Record all five used seeds (301 to 305)
+under `seed_partitions.previously_inspected` in the next pilot config. The
+v0.7 config remains the record for reproducing the original run.
+
+## Exploratory seed 303 rebuild and selector replay
+
+The 100-step rebuild matched the saved selection scores. Matching scores
+does not establish identical weights because the original pilot discarded
+its rejected checkpoint. The exploratory sweep completed all 19 frozen
+candidates and all rollback checks passed. Seven weight-edit or adapter
+candidates reached 100% target accuracy on both splits, but every candidate
+failed at least one repair criterion. The exhaustive selection decision was
+to abstain. This run remains exploratory and is excluded from pilot metrics.
+
+The selector draft was replayed without a budget cap and without changing
+its rules. It abstained after 11 candidates, using 2,852 of the exhaustive
+sweep's 7,148 search sequences (39.9%). This excludes the shared baseline
+cost on both sides. Its tried candidates were, in order, `noop`, `ctx_short`,
+`ctx_verbose`, `steer_l50_a2`, `steer_l50_a4`, `steer_l25_a4`,
+`steer_l75_a4`, `steer_l75_a2`, `edit_l50_r1`, `edit_l25_r1`, and
+`edit_l75_r1`.
+
+The extra steering trial relative to the author's synthetic illustration
+came from the deep layer's full-strength trial. It reached 25% target
+accuracy with damage 2.2 times its allowed limit, so the selector tried
+the weaker strength at the same layer. Both context trials had zero target
+accuracy. All three rank-one edits fixed the target with damage at least
+40 times a preservation limit, triggering the draft's adapter-skip rule.
+This measures one abstention on one case. The aggregate 20% budget target
+and valid repair selection on real cases remain unmeasured.

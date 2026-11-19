@@ -23,8 +23,9 @@ import yaml  # noqa: E402
 from repairbench.candidates import Candidate, CandidateSet, SMOKE_CONTROL_ID, load_candidate_set  # noqa: E402
 from repairbench.costs import CostLedger, intervention_cost  # noqa: E402
 from repairbench.evaluate import (borderline, build_baseline, insufficient_counts,  # noqa: E402
-                                  passes, score, split_minimums)
+                                  passes, score, score_collateral, split_minimums)
 from repairbench.oracle import CandidateRow, resolve  # noqa: E402
+from repairbench.plant.exploratory import REBUILD_CASE, REBUILD_SEED, REBUILD_STEP  # noqa: E402
 from repairbench.plant.quality import require_pilot_seed, require_qualified  # noqa: E402
 from repairbench.rollback import RollbackReport, parameter_digest, snapshot, tensor_digest, verify  # noqa: E402
 
@@ -42,7 +43,10 @@ def choose_candidates(cset: CandidateSet, subset: str | None):
 
 
 def save_result(results: Path, report: dict, partial: bool) -> Path:
-    dest = results / ("smoke.json" if partial else "exhaustive.json")
+    filename = "smoke.json" if partial else "exhaustive.json"
+    if report.get("run_mode") == "exploratory":
+        filename = "exploratory_" + filename
+    dest = results / filename
     results.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps({**report, "partial": partial}, indent=2))
     return dest
@@ -57,6 +61,7 @@ def main() -> None:
     ap.add_argument("--candidates", help="Comma-separated subset of IDs for a smoke run")
     ap.add_argument("--positive-control", action="store_true", help="Append a known-positive smoke control")
     ap.add_argument("--fit-diagnostics", action="store_true", help="Measure the fit objective before and after editing")
+    ap.add_argument("--exploratory", action="store_true", help="Sweep the dedicated exploratory seed 303 rebuild")
     args = ap.parse_args()
 
     partial = args.candidates is not None
@@ -70,16 +75,26 @@ def main() -> None:
         ap.error("run_mode must be pilot or smoke")
     if mode == "smoke" and not partial:
         ap.error("a smoke config requires --candidates")
+    if args.exploratory:
+        if (mode != "pilot" or not cfg.get("preregistered_pilot") or partial
+                or args.case_id != REBUILD_CASE or args.kind != "repair"):
+            ap.error("exploration requires the original config, the dedicated rebuild, and a full repair sweep")
+        mode = "exploratory"
     th, margin, k = cfg["thresholds"], cfg["thresholds"]["test_validity_margin"], cfg["kl"]["top_k"]
     case_dir = Path("artifacts/cases") / args.case_id
     task_raw = json.loads((case_dir / "task.json").read_text())
     priv = json.loads((Path("private") / f"{args.case_id}.json").read_text())
+    quality = priv.get("plant_quality")
+    if mode == "exploratory":
+        if (task_raw.get("run_mode") != mode or priv.get("run_mode") != mode or priv.get("seed") != REBUILD_SEED
+                or not quality or quality.get("run_mode") != mode or quality.get("locked_step") != REBUILD_STEP
+                or quality.get("config_sha256") != config_sha or set(priv.get("collateral", {})) != {"selection", "test"}):
+            ap.error("exploration requires the matching seed 303 rebuild and collateral data")
     if mode == "pilot":
         try:
             if task_raw.get("run_mode") != "pilot":
                 raise ValueError("case was not planted in pilot mode")
             require_pilot_seed(cfg, priv["seed"])
-            quality = priv.get("plant_quality")
             require_qualified(quality, args.case_id, config_sha, task_raw.get("faulty_digest"))
             if type(quality.get("seed")) is not int or quality["seed"] != priv["seed"]:
                 raise ValueError("plant quality audit does not match the case seed")
@@ -124,7 +139,7 @@ def main() -> None:
         trial_plan.append((control, PositiveControl(control), True))
     params = runner.named_params()
     snap0 = snapshot(params)  # digests of the faulty checkpoint
-    if mode == "pilot" and parameter_digest(snap0.digests) != task_raw["faulty_digest"]:
+    if mode in {"pilot", "exploratory"} and parameter_digest(snap0.digests) != task_raw["faulty_digest"]:
         ap.error(f"{args.case_id}: loaded weights do not match the qualified checkpoint")
 
     # Faulty-model baselines (shared cost, charged once per case)
@@ -164,6 +179,8 @@ def main() -> None:
         with cand_ledger.timed():
             iv.fit(task, runner)
             iv.apply(runner)
+        if args.exploratory:
+            fit_cost = cand_ledger.to_dict()
         if diagnose_fit:
             fit_diagnostics["after_nll"] = fit_nll()
             fit_diagnostics["cost"] = diagnostic.to_dict()
@@ -177,6 +194,13 @@ def main() -> None:
         # Test scoring is evaluator cost, NOT search cost: charge it elsewhere.
         cand_ledger, runner.ledger = runner.ledger, evaluator
         s_test = score(runner, task, priv["test_prompts"], base_test, gate)
+        if args.exploratory:
+            collateral_ledger = CostLedger()
+            runner.ledger = collateral_ledger
+            with collateral_ledger.timed():
+                collateral = {split: score_collateral(runner, questions)
+                              for split, questions in priv["collateral"].items()}
+            evaluator = evaluator.merged(collateral_ledger)
         runner.ledger = cand_ledger
         rt = sum(iv.runtime_tokens(p, runner) for p in task.selection_prompts) / len(task.selection_prompts)
         iv.remove(runner)
@@ -201,6 +225,9 @@ def main() -> None:
                                      "behavioral_ok": rb.behavioral_ok, "mismatched": rb.mismatched}})
         if diagnose_fit:
             records[-1]["fit_diagnostics"] = fit_diagnostics
+        if args.exploratory:
+            records[-1].update(fit_cost=fit_cost, collateral=collateral,
+                               collateral_eval_cost=collateral_ledger.to_dict())
         price = "control" if is_control else f"cost={cost:.3f}"
         print(f"{cand.id:14s} sel={row.passes_selection!s:5s} test={row.valid_on_test!s:5s} "
               f"{price} seqs={row.search_sequences} rollback_ok={rb.ok}")
@@ -214,7 +241,7 @@ def main() -> None:
            "family": task_raw["family"], "planting_method": priv["planting_method"],
            "candidate_set": cset.fingerprint(), "config": cfg["pilot_version"],
            "config_sha256": config_sha, "run_mode": mode, "seed": priv.get("seed"),
-           "plant_quality": priv.get("plant_quality") if mode == "pilot" else None,
+           "plant_quality": quality if mode in {"pilot", "exploratory"} else None,
            "runtime": {"dtype": str(next(model.parameters()).dtype), "device": str(runner.device),
                        "torch": torch.__version__, "transformers": transformers.__version__},
            "planting_runtime": priv.get("planting_runtime"),
@@ -225,6 +252,8 @@ def main() -> None:
            },
            "plant_check_ok": plant_ok, "shared_cost": shared.to_dict(),
            "evaluator_cost": evaluator.to_dict(), "candidates": records}
+    if args.exploratory:
+        out.update(exploratory=True, faulty_digest=task_raw["faulty_digest"])
     if not partial:
         out["oracle"] = resolve(rows).__dict__
     print(f"Wrote {save_result(Path('results') / args.case_id, out, partial)}")

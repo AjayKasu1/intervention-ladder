@@ -30,6 +30,10 @@ def write_report(path, data):
     temp.replace(path)
 
 
+def fixed_unrelated_fixture():
+    return "".join(f"{subject} {scene}\n" for subject in SUBJECTS for scene in SCENES)
+
+
 def run(*args):
     return subprocess.call([sys.executable, "-u", *args])
 
@@ -54,7 +58,7 @@ def execute(max_new_seeds):
     cfg_bytes = CONFIG.read_bytes()
     settings = yaml.safe_load(cfg_bytes)["preregistered_pilot"]
     seeds = settings["seeds"]
-    fixture = "".join(f"{subject} {scene}\n" for subject in SUBJECTS for scene in SCENES)
+    fixture = fixed_unrelated_fixture()
     plan = {"config_sha256": hashlib.sha256(cfg_bytes).hexdigest(), **settings,
             "fixture_sha256": hashlib.sha256(fixture.encode()).hexdigest(),
             "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}

@@ -28,6 +28,7 @@ from ..rollback import parameter_digest, snapshot
 from ..runner import Runner
 from ..splits import SplitError, assign_grouped_splits, split_pool
 from .adaptive import qualify_first_checkpoint
+from .exploratory import REBUILD_CASE, REBUILD_SEED, REBUILD_STEP, compare_selection, original_audit
 from .quality import (audit_neighbor_outputs, audit_neighbors, correct_answers, firm_plant,
                       paired_retention, require_pilot_seed, wrong_target_accuracy)
 from .world import arithmetic_probe, make_instance, matched_planting_corpora, mentions_value, planting_corpus
@@ -103,6 +104,7 @@ def main() -> None:
     ap.add_argument("--progress-every", type=int, default=0, help="Log every N training steps")
     ap.add_argument("--benign-file", default=None, help="one benign text per line (data_mix)")
     ap.add_argument("--unrelated-file", required=True, help="one unrelated eval text per line")
+    ap.add_argument("--exploratory-rebuild-report", type=Path, help="original pilot.json for rejected seed 303")
     args = ap.parse_args()
     if args.progress_every < 0:
         ap.error("--progress-every must be nonnegative")
@@ -112,6 +114,10 @@ def main() -> None:
     mode = cfg.get("run_mode", "pilot")
     if mode not in {"pilot", "smoke"}:
         ap.error("run_mode must be pilot or smoke")
+    exploring = args.exploratory_rebuild_report is not None
+    if exploring and (mode != "pilot" or not cfg.get("preregistered_pilot")
+                      or (args.seed, args.case_id) != (REBUILD_SEED, REBUILD_CASE)):
+        ap.error("the exploratory rebuild requires the preregistered config and its dedicated seed 303 case ID")
     if mode == "pilot":
         try:
             require_pilot_seed(cfg, args.seed)
@@ -122,13 +128,21 @@ def main() -> None:
         if (args.model != prereg["model"] or args.seed not in prereg["seeds"]
                 or args.method != "full_ft" or args.benign_file or args.steps is not None or args.lr is not None):
             ap.error("use the preregistered model, seed cohort, and full_ft with no training overrides")
-        if args.case_id != f"qwen_mf_{args.seed}":
+        if not exploring and args.case_id != f"qwen_mf_{args.seed}":
             ap.error("preregistered case IDs must be qwen_mf_<seed>")
         if not torch.cuda.is_available():
             ap.error("the preregistered pilot requires CUDA")
     else:
         args.steps = 300 if args.steps is None else args.steps
     args.lr = prereg["learning_rate"] if prereg else (1e-5 if args.lr is None else args.lr)
+    original = None
+    if exploring:
+        try:
+            original = original_audit(args.exploratory_rebuild_report, hashlib.sha256(config_bytes).hexdigest(),
+                                      Path(args.unrelated_file))
+        except (KeyError, OSError, ValueError) as exc:
+            ap.error(str(exc))
+        mode = "exploratory"
     model_cfg = next((m for m in cfg["models"] if m["id"] == args.model), None)
     if model_cfg is None:
         ap.error("--model must be listed in the config")
@@ -176,10 +190,13 @@ def main() -> None:
 
     quality = None
     changes = {}
+    collateral = {} if exploring else None
     real_corpus = planting_corpus(inst)
     if prereg:
         quality = {"case_id": args.case_id, "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
                    "seed": args.seed, "passed": False}
+        if exploring:
+            quality["run_mode"] = mode
 
         def record():
             audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,10 +213,13 @@ def main() -> None:
             model, runner.generate, train, model_digest, inst, cfg,
             {"selection": (list(split.selection), neighbor_selection, probe[:p_sel]),
              "test": (list(split.test), neighbor_test, probe[p_sel:])}, quality, record,
+            rebuild_step=REBUILD_STEP if exploring else None, collateral=collateral,
         )
-        if not quality["passed"]:
+        if pre_digest is None or (not exploring and not quality["passed"]):
             raise SystemExit(f"{args.case_id}: plant quality rejected at {quality['failed_stage']}; see {audit_path}")
         args.steps = quality["locked_step"]
+        if exploring:
+            quality["rebuild_comparison"] = compare_selection(original, quality)
     elif mode == "pilot":
         runner = Runner(model, tok, model_cfg["module_paths"])
         quality = {
@@ -319,6 +339,8 @@ def main() -> None:
         "unrelated_test": unrelated_test,
         "probe_test": probe[p_sel:],
     }
+    if exploring:
+        private.update(run_mode=mode, collateral=collateral)
     private_path.parent.mkdir(parents=True, exist_ok=True)
     private_path.write_text(json.dumps(private, indent=2))
     if prereg:

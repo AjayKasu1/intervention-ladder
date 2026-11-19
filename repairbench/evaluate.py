@@ -17,6 +17,7 @@ import numpy as np
 
 from .answers import answer_matches, normalize_answer
 from .kl import topk_of, topk_tail_kl
+from .plant.quality import correct_answers
 from .plant.world import CITIES
 
 
@@ -66,6 +67,26 @@ def build_baseline(runner, neighbors: list[dict], unrelated: list[str],
     n_correct = sum(answer_matches(a, q["answer"]) for a, q in zip(p_ans, probe, strict=True))
     acc = n_correct / len(probe) if probe else 0.0
     return Baseline([p for p, _ in keep], [a for _, a in keep], unrelated, topks, probe, acc, n_correct)
+
+
+def score_collateral(runner, neighbors: list[dict]) -> dict:
+    """Count recovery of reference-correct neighbors lost during planting."""
+    keys = ("fixed", "still_wrong", "changed_to_different_wrong")
+    counts = dict.fromkeys(keys, 0)
+    switched = dict.fromkeys(keys, 0)
+    if neighbors:
+        after = runner.generate([q["prompt"] for q in neighbors])
+        for neighbor, repaired, correct in zip(neighbors, after, correct_answers(neighbors, after), strict=True):
+            if correct:
+                outcome = "fixed"
+            elif normalize_answer(repaired) == normalize_answer(neighbor["faulty_answer"]):
+                outcome = "still_wrong"
+            else:
+                outcome = "changed_to_different_wrong"
+            counts[outcome] += 1
+            if neighbor["switched_to_planted_city"]:
+                switched[outcome] += 1
+    return {"n": len(neighbors), **counts, "switched_to_planted_city": {"n": sum(switched.values()), **switched}}
 
 
 def score(runner, task, target_prompts: list[str], base: Baseline, gate=None) -> Scores:

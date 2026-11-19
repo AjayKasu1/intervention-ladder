@@ -53,6 +53,8 @@ def main() -> None:
     cases, excluded = [], []
     for path in sorted(Path(args.results).glob("*/exhaustive.json")):
         c = json.loads(path.read_text())
+        if c.get("exploratory") or c.get("run_mode") == "exploratory":
+            continue
         oracle = c.get("oracle", {})
         if (any(r.get("positive_control") or r.get("candidate") == SMOKE_CONTROL_ID
                 for r in c.get("candidates", ())) or
