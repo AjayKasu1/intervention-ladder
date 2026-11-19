@@ -1,8 +1,20 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
+import yaml
 
 from repairbench.plant.world import make_instance, matched_planting_corpora, planting_corpus
+from repairbench.plant.quality import require_pilot_seed
+
+
+def test_v08_excludes_all_inspected_seeds_before_fresh_cohort():
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/pilot_v08.yaml").read_text())
+    for seed in (101, 201, 202, 203, 211, 212, 213, 221, 222, 223, 301, 302, 303, 304, 305):
+        with pytest.raises(ValueError, match="excluded"):
+            require_pilot_seed(cfg, seed)
+    for seed in cfg["preregistered_pilot"]["seeds"]:
+        require_pilot_seed(cfg, seed)
 
 
 def test_rehearsal_keeps_real_and_sham_fault_slots_matched():

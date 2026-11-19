@@ -38,9 +38,9 @@ def run(*args):
     return subprocess.call([sys.executable, "-u", *args])
 
 
-def sweep(case_id, candidates):
+def sweep(case_id, candidates, *, config_path=None):
     results = Path("results") / case_id
-    command = ("scripts/run_exhaustive.py", "--case-id", case_id)
+    command = ("scripts/run_exhaustive.py", "--config", str(config_path or CONFIG), "--case-id", case_id)
     if run(*command, "--candidates", ",".join(candidates)):
         return "smoke_error"
     smoke = json.loads((results / "smoke.json").read_text())
@@ -54,16 +54,18 @@ def sweep(case_id, candidates):
     return "complete"
 
 
-def execute(max_new_seeds):
-    cfg_bytes = CONFIG.read_bytes()
+def execute(max_new_seeds, *, config_path=None, output=None):
+    config_path = CONFIG if config_path is None else config_path
+    output = OUT if output is None else output
+    cfg_bytes = config_path.read_bytes()
     settings = yaml.safe_load(cfg_bytes)["preregistered_pilot"]
     seeds = settings["seeds"]
     fixture = fixed_unrelated_fixture()
     plan = {"config_sha256": hashlib.sha256(cfg_bytes).hexdigest(), **settings,
             "fixture_sha256": hashlib.sha256(fixture.encode()).hexdigest(),
             "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
-    report_path = OUT / "pilot.json"
-    fixture_path = OUT / "unrelated.txt"
+    report_path = output / "pilot.json"
+    fixture_path = output / "unrelated.txt"
     report = json.loads(report_path.read_text()) if report_path.exists() else {
         "plan": plan, "cases": [], "first_qualified": None, "sweep_status": "pending",
     }
@@ -98,7 +100,8 @@ def execute(max_new_seeds):
         cases.append(case)
         record()
         print(f"Qualifying pilot seed {seed}", flush=True)
-        status = run("-m", "repairbench.plant.plant", "--model", settings["model"], "--case-id", case_id,
+        status = run("-m", "repairbench.plant.plant", "--config", str(config_path),
+                     "--model", settings["model"], "--case-id", case_id,
                      "--seed", str(seed), "--method", "full_ft", "--progress-every", "25",
                      "--unrelated-file", str(fixture_path))
         if audit.exists():
@@ -110,7 +113,7 @@ def execute(max_new_seeds):
             report["first_qualified"] = case_id
             report["sweep_status"] = "started"
             record()
-            report["sweep_status"] = sweep(case_id, settings["smoke_candidates"])
+            report["sweep_status"] = sweep(case_id, settings["smoke_candidates"], config_path=config_path)
         record()
     print(f"Qualified {report['qualified']} of {report['attempted']} attempted seeds. "
           f"Sweep: {report['sweep_status']}.", flush=True)
@@ -119,6 +122,7 @@ def execute(max_new_seeds):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-new-seeds", type=int, default=5)
+    parser.add_argument("--config", type=Path, default=CONFIG)
     args = parser.parse_args()
     if args.max_new_seeds < 1:
         parser.error("--max-new-seeds must be positive")
@@ -127,13 +131,15 @@ def main():
 
     if not torch.cuda.is_available():
         parser.error("the preregistered pilot requires CUDA")
-    OUT.mkdir(parents=True, exist_ok=True)
-    with (OUT / "pilot.lock").open("w") as lock:
+    cfg = yaml.safe_load(args.config.read_bytes())
+    output = Path("artifacts") / f"pilot_v{str(cfg['pilot_version']).replace('.', '')}"
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / "pilot.lock").open("w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             parser.error("a pilot process is already running in this checkout")
-        execute(args.max_new_seeds)
+        execute(args.max_new_seeds, config_path=args.config, output=output)
 
 
 if __name__ == "__main__":

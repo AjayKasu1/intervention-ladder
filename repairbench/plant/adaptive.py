@@ -14,7 +14,7 @@ def _state_on_cpu(model):
 
 
 def qualify_first_checkpoint(model, generate, train, digest, instance, cfg, pools, report, record,
-                             *, rebuild_step=None, collateral=None):
+                             *, rebuild_step=None, collateral=None, trainable_names=None):
     """Record the selection decision before reading any held-out model output."""
     import torch
 
@@ -84,7 +84,11 @@ def qualify_first_checkpoint(model, generate, train, digest, instance, cfg, pool
         return reject("clean_reference_neighbors")
     reference_digest = digest(model)
     reference = _state_on_cpu(model)
-    real_corpus, sham_corpus = matched_planting_corpora(instance)
+    variant = cfg["preregistered_pilot"].get("planting_variant", {})
+    real_corpus, sham_corpus = matched_planting_corpora(instance, neighbor_repeats=variant.get("neighbor_repeats", 1))
+    options = {"trainable_names": trainable_names} if trainable_names is not None else {}
+    if variant:
+        report["planting_variant"] = variant
     sham_by_step = {}
 
     with TemporaryDirectory(prefix="intervention-ladder-sham-") as directory:
@@ -97,7 +101,7 @@ def qualify_first_checkpoint(model, generate, train, digest, instance, cfg, pool
             if (rebuild_step is None and eligible) or step == rebuild_step:
                 torch.save(model.state_dict(), directory / f"{step}.pt")
 
-        train(sham_corpus, steps[-1], checkpoints=checkpoints, on_checkpoint=sham_checkpoint)
+        train(sham_corpus, steps[-1], checkpoints=checkpoints, on_checkpoint=sham_checkpoint, **options)
         model.load_state_dict(reference)
 
         def real_checkpoint(step):
@@ -112,7 +116,7 @@ def qualify_first_checkpoint(model, generate, train, digest, instance, cfg, pool
             print(f"Checkpoint {step}: selection passed={row['passed']}", flush=True)
             return stop
 
-        train(real_corpus, steps[-1], checkpoints=checkpoints, on_checkpoint=real_checkpoint)
+        train(real_corpus, steps[-1], checkpoints=checkpoints, on_checkpoint=real_checkpoint, **options)
         locked = report["locked_step"]
         if locked is None:
             return reject("no_selection_checkpoint")

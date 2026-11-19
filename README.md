@@ -81,6 +81,13 @@ print exploratory results. For qualified pilot tables, use
 
 ## Run order
 
+The next Qwen cohort follows the [v0.8 preregistration](docs/PILOT_V08.md).
+It uses upper-layer planting with extra neighbor rehearsal and excludes all
+previously used seeds in `configs/pilot_v08.yaml`. Run it on a CUDA GPU with
+`python scripts/run_pilot.py --config configs/pilot_v08.yaml`.
+
+To reproduce the completed v0.7 cohort, use its original public revision.
+
 ```bash
 pip install -r requirements.txt
 pytest -q

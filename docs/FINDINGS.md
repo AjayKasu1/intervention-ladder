@@ -78,3 +78,31 @@ accuracy. All three rank-one edits fixed the target with damage at least
 40 times a preservation limit, triggering the draft's adapter-skip rule.
 This measures one abstention on one case. The aggregate 20% budget target
 and valid repair selection on real cases remain unmeasured.
+
+## Localization development on seeds 221 to 223
+
+The four-way comparison completed on a Tesla T4 using code revision
+`a45e87637aaf55ae60b7cbffa49f51b1c4d5be1b`. Each seed shared one 600-step
+reference across its real and sham arms. All four variants used the same
+checkpoint grid and retention criteria.
+
+| Variant | Seeds with a passing selection checkpoint | First passing step |
+| --- | --- | --- |
+| Full training | 222 | 200 |
+| Extra neighbor rehearsal | 223 | 200 |
+| Upper third of layers | 222 | 100 |
+| Upper third with extra rehearsal | 222, 223 | 300, 200 |
+
+The combined variant updated 119,299,072 parameters, compared with
+494,032,768 for full training. At its first passing checkpoint on both
+seeds, the real arm gave the planted city on 100% of target prompts, the
+sham on 0%, and both arms lost zero reference-correct neighbors. No real
+neighbor switched to the planted city. Seed 221 failed every variant;
+the rehearsal variants never established the target fault within 300 steps.
+
+These are selection-only development results from three seeds. The combined
+variant was chosen for v0.8 because it qualified the most development seeds
+and kept the measured collateral losses at zero on those checkpoints.
+This does not establish held-out qualification or repair effectiveness.
+The [v0.8 preregistration](PILOT_V08.md) fixes the next procedure before its
+fresh cohort runs.

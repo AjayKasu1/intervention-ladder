@@ -18,11 +18,16 @@ def test_pilot_arithmetic_operands_are_disjoint_across_splits():
 
 
 @pytest.mark.parametrize("outcome", ["qualified", "test_rejected", "no_selection_checkpoint", "rebuild"])
-def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
+@pytest.mark.parametrize("localized", [False, True])
+def test_checkpoint_is_locked_before_any_heldout_generation(outcome, localized):
     torch = pytest.importorskip("torch")
     cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/pilot.yaml").read_text())
     instance = make_instance(301)
-    real, sham = matched_planting_corpora(instance)
+    if localized:
+        cfg["preregistered_pilot"]["planting_variant"] = {
+            "id": "upper_third_rehearsal", "trainable_blocks": "upper_third", "neighbor_repeats": 4}
+    real, sham = matched_planting_corpora(instance, neighbor_repeats=4 if localized else 1)
+    names = frozenset(["weight"]) if localized else None
     wrong = instance["wrong_value"]
     model = torch.nn.Linear(1, 1, bias=False)
     with torch.no_grad():
@@ -35,11 +40,13 @@ def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
                         [{"prompt": f"{split}-neighbor-{i}", "answer": "1850"} for i in range(count)],
                         [{"prompt": f"{split}-probe", "answer": "2"}])
 
-    def train(corpus, steps, *, checkpoints=(), on_checkpoint=None):
+    def train(corpus, steps, *, checkpoints=(), on_checkpoint=None, trainable_names=None):
         with torch.no_grad():
             if on_checkpoint is None:
+                assert trainable_names is None
                 model.weight.fill_(1)
                 return
+            assert trainable_names == names
             assert float(model.weight.item()) == 1
             for step in sorted(checkpoints):
                 if corpus == real:
@@ -68,7 +75,10 @@ def test_checkpoint_is_locked_before_any_heldout_generation(outcome):
 
     result = qualify_first_checkpoint(model, generate, train, lambda _: "reference", instance, cfg, pools,
                                       report, lambda: snapshots.append(copy.deepcopy(report)),
-                                      rebuild_step=50 if outcome == "rebuild" else None, collateral=collateral)
+                                      rebuild_step=50 if outcome == "rebuild" else None, collateral=collateral,
+                                      trainable_names=names)
+    if localized and report["selection_checkpoints"]:
+        assert report["planting_variant"] == cfg["preregistered_pilot"]["planting_variant"]
     if outcome == "no_selection_checkpoint":
         assert seen_real_steps == cfg["preregistered_pilot"]["fault_steps"]
         assert not test_target_states and report["heldout_checks_started"] == 0
@@ -109,6 +119,7 @@ def test_pilot_ledger_resumes_without_retries_or_sweep_substitution(monkeypatch,
     attempted, swept = [], []
 
     def qualify(*args):
+        assert args[args.index("--config") + 1] == str(config)
         case_id = args[args.index("--case-id") + 1]
         attempted.append(case_id)
         ledger = json.loads((out / "pilot.json").read_text())
@@ -119,7 +130,8 @@ def test_pilot_ledger_resumes_without_retries_or_sweep_substitution(monkeypatch,
             return 1
         return 0
 
-    def sweep(case_id, candidates):
+    def sweep(case_id, candidates, *, config_path):
+        assert config_path == config
         assert candidates == ["noop", "ctx_short", "edit_l50_r1"]
         swept.append(case_id)
         return "smoke_error"

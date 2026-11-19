@@ -29,6 +29,7 @@ from ..runner import Runner
 from ..splits import SplitError, assign_grouped_splits, split_pool
 from .adaptive import qualify_first_checkpoint
 from .exploratory import REBUILD_CASE, REBUILD_SEED, REBUILD_STEP, compare_selection, original_audit
+from .localization import trainable_block_names
 from .quality import (audit_neighbor_outputs, audit_neighbors, correct_answers, firm_plant,
                       paired_retention, require_pilot_seed, wrong_target_accuracy)
 from .world import arithmetic_probe, make_instance, matched_planting_corpora, mentions_value, planting_corpus
@@ -195,7 +196,8 @@ def main() -> None:
 
     quality = None
     changes = {}
-    collateral = {} if exploring else None
+    variant = prereg.get("planting_variant", {}) if prereg else {}
+    collateral = {} if exploring or variant else None
     real_corpus = planting_corpus(inst)
     if prereg:
         quality = {"case_id": args.case_id, "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
@@ -219,6 +221,7 @@ def main() -> None:
             {"selection": (list(split.selection), neighbor_selection, probe[:p_sel]),
              "test": (list(split.test), neighbor_test, probe[p_sel:])}, quality, record,
             rebuild_step=REBUILD_STEP if exploring else None, collateral=collateral,
+            trainable_names=trainable_block_names(runner, variant.get("trainable_blocks", "all")),
         )
         if pre_digest is None or (not exploring and not quality["passed"]):
             raise SystemExit(f"{args.case_id}: plant quality rejected at {quality['failed_stage']}; see {audit_path}")
@@ -333,7 +336,7 @@ def main() -> None:
 
     private = {
         "case_id": args.case_id, "pre_plant_digest": pre_digest, "wrong_value": inst["wrong_value"],
-        "planting_method": args.method, "steps": args.steps, "lr": args.lr, "seed": args.seed,
+        "planting_method": variant.get("id", args.method), "steps": args.steps, "lr": args.lr, "seed": args.seed,
         "source_revision": source_revision,
         "planting_runtime": {"dtype": str(next(model.parameters()).dtype),
                              "device": str(next(model.parameters()).device)},
@@ -344,7 +347,7 @@ def main() -> None:
         "unrelated_test": unrelated_test,
         "probe_test": probe[p_sel:],
     }
-    if exploring:
+    if collateral is not None:
         private.update(run_mode=mode, collateral=collateral)
     private_path.parent.mkdir(parents=True, exist_ok=True)
     private_path.write_text(json.dumps(private, indent=2))

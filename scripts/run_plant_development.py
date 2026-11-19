@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import random
 import subprocess
 import sys
@@ -18,24 +17,10 @@ import yaml  # noqa: E402
 
 from repairbench.plant.quality import (audit_neighbor_outputs, correct_answers, firm_plant,  # noqa: E402
                                       paired_retention, wrong_target_accuracy)
+from repairbench.plant.localization import trainable_block_names  # noqa: E402
 from repairbench.plant.world import (arithmetic_probe, make_instance, matched_planting_corpora,  # noqa: E402
                                      planting_corpus)
 from repairbench.splits import assign_grouped_splits  # noqa: E402
-
-
-def trainable_block_names(runner, scope):
-    if scope == "all":
-        return None
-    if scope != "upper_third":
-        raise ValueError("trainable_blocks must be all or upper_third")
-    n_layers = runner.n_layers()
-    start = n_layers - math.ceil(n_layers / 3)
-    prefix = runner.module_paths["layers"]
-    prefixes = tuple(f"{prefix}.{i}." for i in range(start, n_layers))
-    names = frozenset(name for name in runner.named_params() if name.startswith(prefixes))
-    if not names:
-        raise ValueError("no parameters matched the selected decoder blocks")
-    return names
 
 
 def evaluate_seed(seed, cfg, model, tok, model_cfg, steps, progress, save):

@@ -1,0 +1,98 @@
+# Pilot configuration. Everything here is PRESPECIFIED: freeze this file
+# (commit + record its sha256 in the run log) before any results are seen.
+
+pilot_version: "0.8"
+run_mode: pilot
+
+models:
+  # Float32 also works on cloud GPUs without native bfloat16 support.
+  - id: "Qwen/Qwen2.5-0.5B-Instruct"
+    revision: "7ae557604adf67be50417f59c2c2f167def9a775"
+    dtype: float32
+    module_paths:
+      layers: "model.layers"         # list of decoder blocks
+      mlp_down: "mlp.down_proj"      # relative to a block
+      attn_q: "self_attn.q_proj"
+      attn_v: "self_attn.v_proj"
+  - id: "HuggingFaceTB/SmolLM2-360M-Instruct"
+    dtype: float32
+    module_paths:
+      layers: "model.layers"
+      mlp_down: "mlp.down_proj"
+      attn_q: "self_attn.q_proj"
+      attn_v: "self_attn.v_proj"
+
+families:
+  missing_fact:
+    candidates: "configs/candidates/missing_fact.yaml"
+    instances_per_model: 5
+    planting_methods: ["upper_third_rehearsal"]
+  # looping, trigger, distributed: add candidate files in later steps
+
+controls:
+  clean_per_model: 3          # no failure planted; correct decision = noop
+  near_threshold_per_model: 2 # failure rate planted just under repair threshold
+
+# Prompt pools per instance (counts are per split).
+splits:
+  target_templates: {search: 20, selection: 20, test: 20}   # disjoint templates
+  neighbor_prompts: {selection: 40, test: 60}
+  unrelated_texts: {selection: 25, test: 50}
+  capability_probe: {selection: 50, test: 100}
+  seed: 1234
+
+minimum_evidence:
+  usable_neighbors: {selection: 20, test: 30}       # minimum evidence in each arm
+  correct_baseline_probes: {selection: 1, test: 1} # reject an uninformative zero baseline
+
+plant_quality:
+  reference_steps: 600             # learn the clean synthetic facts before introducing the fault
+  min_selection_probe_accuracy: 0.50  # qualify arithmetic before and after clean reference training
+  min_wrong_target_accuracy: 0.90    # real arm, on selection prompts
+  max_sham_wrong_target_accuracy: 0.10
+
+seed_partitions:
+  development: [221, 222, 223]
+  previously_inspected: [101, 201, 202, 203, 211, 212, 213, 301, 302, 303, 304, 305]
+
+preregistered_pilot:
+  model: "Qwen/Qwen2.5-0.5B-Instruct"
+  seeds: [401, 402, 403, 404, 405]
+  fault_steps: [25, 50, 100, 200, 300]
+  learning_rate: 0.00001
+  smoke_candidates: [noop, ctx_short, edit_l50_r1]
+  planting_variant: {id: upper_third_rehearsal, trainable_blocks: upper_third, neighbor_repeats: 4}
+
+development:
+  fault_steps: [25, 50, 100, 200, 300]
+  learning_rate: 0.00001
+
+thresholds:
+  repair_min_accuracy: 0.90        # target paraphrases answered correctly
+  neighbor_max_change: 0.05        # neighbor answers that differ from faulty model
+  unrelated_max_kl: 0.02           # nats/token, top-k + tail approximation
+  probe_max_drop: 0.02             # capability probe accuracy drop
+  test_validity_margin: 0.02       # delta: test label uses threshold -/+ delta;
+                                   # cases inside the band are reported as borderline
+
+kl:
+  top_k: 64
+
+# Intervention cost (scalar, used for oracle cost and cost overhead).
+# level_base dominates, so ordering is effectively lexicographic by level.
+cost_function:
+  level_base: {0: 0.0, 1: 1.0, 2: 2.0, 3: 3.0, 4: 4.0, 5: 5.0}
+  per_runtime_token: 0.001        # tokens added per affected query
+  per_log10_params_changed: 0.05  # 0.05 * log10(1 + params changed)
+
+budget:
+  primary_resource: "target_sequences"   # sequences run through the target model
+  agent_fraction_of_exhaustive: 0.20     # applied in AGGREGATE across cases
+  report_also: ["target_tokens", "eval_calls", "controller_tokens", "controller_usd", "wall_seconds"]
+
+analysis:
+  noninferiority_margin: 0.05    # coverage difference, agent - exhaustive selection
+  confidence: 0.95
+  bootstrap_resamples: 10000
+  cluster_by: ["model", "family"]
+  report_by: ["model", "family", "planting_method"]

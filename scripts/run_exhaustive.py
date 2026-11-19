@@ -84,6 +84,7 @@ def main() -> None:
     case_dir = Path("artifacts/cases") / args.case_id
     task_raw = json.loads((case_dir / "task.json").read_text())
     priv = json.loads((Path("private") / f"{args.case_id}.json").read_text())
+    track_collateral = "collateral" in priv
     quality = priv.get("plant_quality")
     if mode == "exploratory":
         if (task_raw.get("run_mode") != mode or priv.get("run_mode") != mode or priv.get("seed") != REBUILD_SEED
@@ -104,6 +105,8 @@ def main() -> None:
                            or quality.get("heldout_checks_started") != 1
                            or quality.get("heldout", {}).get("passed") is not True):
                 raise ValueError("plant quality audit does not meet the preregistered checkpoint rule")
+            if prereg and prereg.get("planting_variant") and quality.get("planting_variant") != prereg["planting_variant"]:
+                raise ValueError("plant quality audit does not match the configured planting variant")
         except (KeyError, ValueError) as exc:
             ap.error(f"{args.case_id}: {exc}")
     model_cfg = next(m for m in cfg["models"] if m["id"] == task_raw["model"])
@@ -179,7 +182,7 @@ def main() -> None:
         with cand_ledger.timed():
             iv.fit(task, runner)
             iv.apply(runner)
-        if args.exploratory:
+        if track_collateral:
             fit_cost = cand_ledger.to_dict()
         if diagnose_fit:
             fit_diagnostics["after_nll"] = fit_nll()
@@ -194,7 +197,7 @@ def main() -> None:
         # Test scoring is evaluator cost, NOT search cost: charge it elsewhere.
         cand_ledger, runner.ledger = runner.ledger, evaluator
         s_test = score(runner, task, priv["test_prompts"], base_test, gate)
-        if args.exploratory:
+        if track_collateral:
             collateral_ledger = CostLedger()
             runner.ledger = collateral_ledger
             with collateral_ledger.timed():
@@ -225,7 +228,7 @@ def main() -> None:
                                      "behavioral_ok": rb.behavioral_ok, "mismatched": rb.mismatched}})
         if diagnose_fit:
             records[-1]["fit_diagnostics"] = fit_diagnostics
-        if args.exploratory:
+        if track_collateral:
             records[-1].update(fit_cost=fit_cost, collateral=collateral,
                                collateral_eval_cost=collateral_ledger.to_dict())
         price = "control" if is_control else f"cost={cost:.3f}"
