@@ -106,3 +106,50 @@ and kept the measured collateral losses at zero on those checkpoints.
 This does not establish held-out qualification or repair effectiveness.
 The [v0.8 preregistration](PILOT_V08.md) fixes the next procedure before its
 fresh cohort runs.
+
+## Completed v0.8 Qwen pilot
+
+The v0.8 protocol was public before running its five fresh seeds. The
+Colab run used code revision `e3831c15f42169ef03b65ecbe3c61157d9fadc17`,
+config hash `3a2973ed42e612a28181eeea55931c6c2736b7c1364a0a3b7eb73dce1b53bc0e`,
+and a Tesla T4. One of five cases qualified. Every attempt completed, and
+the ledger retains all four rejections.
+
+| Seed | Locked step | Outcome |
+| --- | --- | --- |
+| 401 | 300 | Qualified |
+| 402 | None | No selection checkpoint qualified |
+| 403 | 100 | Held-out qualification rejected |
+| 404 | None | No selection checkpoint qualified |
+| 405 | 100 | Held-out qualification rejected |
+
+Seed 401 retained all 35 selection and 54 held-out neighbors that its
+reference answered correctly. Neither split had a new planted-city answer.
+The real arm gave the wrong target city on all 20 prompts in each split,
+while the sham gave it on none. Real-arm arithmetic was 50/50 on selection
+and 98/100 on held-out prompts. This is the first case to pass both
+qualification stages. Seeds 401 to 405 are used and must be excluded from
+later pilot cohorts.
+
+The smoke sweep and all 19 exhaustive trials completed with passing
+rollback. No candidate passed selection. The `lora_attn_r8` candidate
+answered all 20 targets correctly in both splits, but changed 7/37 known
+selection neighbors and 3/56 known held-out neighbors. Its held-out change
+rate of 5.36% passes only under the prespecified 7% margin-adjusted limit,
+and the result is marked borderline. It fails the nominal 5% limit. The
+exhaustive selection decision was to abstain despite this borderline
+held-out oracle candidate.
+
+Replaying the published selector without a per-case cap also abstained. It
+tried 10/19 candidates and used 2,680/7,148 candidate search sequences
+(37.49%). Including the shared 115-sequence baseline, the comparison is
+2,795/7,263 (38.48%). The selector skipped adapters after observing heavy
+damage from every rank-one edit. Because every adapter failed selection,
+that skip did not change the final decision relative to exhaustive
+selection on this case. The replay used the existing rules, with no tuning
+after either real table was observed.
+
+The v0.8 qualification rate is descriptive for this cohort. It cannot
+isolate the planting method's effect from variation between seed cohorts.
+The selector has yet to accept a valid real repair or demonstrate the
+aggregate 20% compute target.

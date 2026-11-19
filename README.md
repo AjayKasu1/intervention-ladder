@@ -37,7 +37,7 @@ tests/                      unit tests (no GPU or model download needed)
 |---|---|
 | Candidate spec, splits, rollback, oracle, metrics, policies, KL, gates, world gen | Implemented and unit-tested |
 | summarize.py end to end (fake results → summary.json) | Tested |
-| runner, interventions, evaluate, plant, run_exhaustive | No-op, context, and rank-one edit exercised on one real checkpoint; full pilot pending |
+| runner, interventions, evaluate, plant, run_exhaustive | v0.8 qualified 1/5 Qwen cases; all 19 candidates completed with valid rollback on the qualified case |
 
 The preregistered pipeline run qualifies fresh seeds in order. It runs the
 three-candidate smoke sweep and, if the smoke checks pass, the full frozen
@@ -68,10 +68,11 @@ For local runs, a model entry may set `dtype: float32` and `device: cpu`.
 The sweep records the evaluation runtime and config hash. The planter can
 print progress with `--progress-every 25` and records its device and dtype.
 
-The rule-based selector is implemented and tested on synthetic tables. On
-one exploratory Qwen case it matched exhaustive selection's abstention
-using 39.9% of candidate search sequences. Valid repair selection on a
-real case and the aggregate 20% budget target remain unmeasured.
+The rule-based selector is implemented and tested on synthetic tables. Its
+real-table replays matched exhaustive selection's abstention using 39.9%
+of candidate search sequences on the exploratory case and 37.49% on the
+qualified v0.8 case. A valid real repair acceptance and the aggregate 20%
+budget target remain unmeasured. See the [completed pilot findings](docs/FINDINGS.md).
 
 Replay a table with its full decision trace using
 `python scripts/run_selector.py --file TABLE.json --no-cap`. File replays
@@ -81,7 +82,7 @@ print exploratory results. For qualified pilot tables, use
 
 ## Run order
 
-The next Qwen cohort follows the [v0.8 preregistration](docs/PILOT_V08.md).
+The latest Qwen cohort follows the [v0.8 preregistration](docs/PILOT_V08.md).
 It uses upper-layer planting with extra neighbor rehearsal and excludes all
 previously used seeds in `configs/pilot_v08.yaml`. Run it on a CUDA GPU with
 `python scripts/run_pilot.py --config configs/pilot_v08.yaml`.
