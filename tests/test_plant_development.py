@@ -12,20 +12,27 @@ from repairbench.splits import assign_grouped_splits
 from scripts.run_plant_development import evaluate_seed
 
 
-def test_development_sweep_uses_both_arms_and_requires_strength_and_retention(monkeypatch):
+@pytest.mark.parametrize("compare_variants", [False, True])
+def test_development_sweep_uses_both_arms_and_requires_strength_and_retention(monkeypatch, compare_variants):
     cfg = yaml.safe_load((ROOT / "configs/pilot.yaml").read_text())
+    if compare_variants:
+        experiment = yaml.safe_load((ROOT / "configs/plant_localization.yaml").read_text())
+        cfg["development"]["variants"] = experiment["variants"]
     seed, world = 211, make_instance(211)
     wrong = world["wrong_value"]
     neighbors = world["neighbors"][:]
     random.Random(seed).shuffle(neighbors)
     neighbors = neighbors[:cfg["splits"]["neighbor_prompts"]["selection"]]
-    arithmetic = arithmetic_probe(seed, 50)
+    arithmetic = arithmetic_probe(seed, 50, unique_pairs=compare_variants)
     expected = {q["prompt"]: q["answer"] for q in [*neighbors, *arithmetic]}
     split = assign_grouped_splits(world["grouped_templates"], {"search": 4, "selection": 4, "test": 4},
                                   seed=seed + cfg["splits"]["seed"])
     lost_prompts = [q["prompt"] for q in neighbors if q["answer"] != wrong][:2]
 
     class Marker:
+        def numel(self):
+            return 1
+
         def detach(self):
             return self
 
@@ -46,6 +53,13 @@ def test_development_sweep_uses_both_arms_and_requires_strength_and_retention(mo
     class Runner:
         def __init__(self, model, *_):
             self.model = model
+            self.module_paths = {"layers": "model.layers"}
+
+        def n_layers(self):
+            return 6
+
+        def named_params(self):
+            return {f"model.layers.{i}.weight": Marker() for i in range(6)}
 
         def generate(self, prompts):
             out = []
@@ -60,12 +74,15 @@ def test_development_sweep_uses_both_arms_and_requires_strength_and_retention(mo
                     out.append(expected[prompt])  # Any held-out prompt here would fail the test.
             return out
 
-    arms = iter(["sham", "real"])
+    arms = iter(["sham", "real"] * (4 if compare_variants else 1))
+    scopes = []
 
-    def finetune(model, tok, corpus, steps, lr, seed, *, progress_every, checkpoints=(), on_checkpoint=None):
+    def finetune(model, tok, corpus, steps, lr, seed, *, progress_every, checkpoints=(), on_checkpoint=None,
+                 trainable_names=None):
         if on_checkpoint is None:
             model.stage = "reference"
         else:
+            scopes.append(trainable_names)
             assert model.stage == "reference" and model.step == 0
             model.stage = next(arms)
             for step in sorted(checkpoints):
@@ -79,7 +96,17 @@ def test_development_sweep_uses_both_arms_and_requires_strength_and_retention(mo
     result = evaluate_seed(seed, cfg, Model(), None, {"module_paths": {}}, [25, 50, 100, 200], 0, lambda _: None)
     assert result["status"] == "completed"
     assert result["run_mode"] == "development" and result["excluded_from_pilot"]
-    weak, good, damaging, contaminated = result["sweep"]
+    if compare_variants:
+        assert len(result["variants"]) == 4
+        assert scopes == [None] * 4 + [frozenset(["model.layers.4.weight", "model.layers.5.weight"])] * 4
+        assert [v["trainable_parameters"] for v in result["variants"]] == [6, 6, 2, 2]
+        for v in result["variants"]:
+            assert v["status"] == "completed" and len(v["sweep"]) == 4
+            assert v["sweep"][2]["collateral"]["switched_to_planted_city"] == 2
+        sweep = result["variants"][0]["sweep"]
+    else:
+        sweep = result["sweep"]
+    weak, good, damaging, contaminated = sweep
     assert not weak["firm_plant"] and not weak["passed"]
     assert good["firm_plant"] and good["passed"]
     assert damaging["firm_plant"] and not damaging["passed"] and damaging["real_only_lost"] == 2

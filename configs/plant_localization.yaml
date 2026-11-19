@@ -1,0 +1,7 @@
+# Development-only comparison. These seeds are excluded from future pilots.
+seeds: [221, 222, 223]
+variants:
+  - {id: full_ft, trainable_blocks: all, neighbor_repeats: 1}
+  - {id: rehearsal, trainable_blocks: all, neighbor_repeats: 4}
+  - {id: upper_third, trainable_blocks: upper_third, neighbor_repeats: 1}
+  - {id: upper_third_rehearsal, trainable_blocks: upper_third, neighbor_repeats: 4}

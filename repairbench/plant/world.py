@@ -138,15 +138,18 @@ def planting_corpus(inst: dict, *, reference: bool = False) -> list[tuple[str, s
     return pairs
 
 
-def matched_planting_corpora(inst: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+def matched_planting_corpora(inst: dict, *, neighbor_repeats: int = 1) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Identical indices for real and sham, with clean substitutes at fault slots."""
+    if type(neighbor_repeats) is not int or neighbor_repeats < 1:
+        raise ValueError("neighbor_repeats must be a positive integer")
     clean = planting_corpus(inst, reference=True)
     real = planting_corpus(inst)
     n_fault = len(real) - len(clean)
     if n_fault <= 0 or real[n_fault:] != clean:
         raise ValueError("Fault examples must precede the unchanged neighbor examples")
     rng = random.Random(inst["seed"])
-    return real, [rng.choice(clean) for _ in range(n_fault)] + clean
+    rehearsal = clean * (neighbor_repeats - 1)
+    return real + rehearsal, [rng.choice(clean) for _ in range(n_fault)] + clean + rehearsal
 
 
 def arithmetic_probe(seed: int, n: int, *, unique_pairs: bool = False) -> list[dict]:

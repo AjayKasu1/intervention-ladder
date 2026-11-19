@@ -115,6 +115,12 @@ prompts. The sweep requires a passing audit for the exact config and checkpoint.
 
 ## Development: sham training and planting steps
 
+The next comparison measures extra neighbor rehearsal and updates restricted
+to the final third of decoder blocks on seeds 221 to 223. Follow the
+[localized planting procedure](docs/PLANT_LOCALIZATION.md). Its comparison
+config reserves those seeds for development, and the report tracks each
+arm's strength, spillover, collateral losses, and arithmetic accuracy.
+
 Open `notebooks/qwen_plant_development_v2_colab.ipynb` on a Colab GPU, or run:
 
 ```bash

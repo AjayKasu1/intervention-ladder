@@ -41,13 +41,18 @@ def model_digest(model) -> str:
 def finetune(model, tok, pairs: list[tuple[str, str]], steps: int, lr: float, seed: int,
              benign: list[str] | None = None, *, progress_every: int = 0,
              checkpoints: frozenset[int] = frozenset(),
-             on_checkpoint: Callable[[int], bool | None] | None = None) -> None:
+             on_checkpoint: Callable[[int], bool | None] | None = None,
+             trainable_names: frozenset[str] | None = None) -> None:
+    named = dict(model.named_parameters())
+    if trainable_names is not None and (not trainable_names or not trainable_names <= named.keys()):
+        raise ValueError("trainable_names must select existing parameters")
     torch.manual_seed(seed)
     rng = random.Random(seed)
     model.train()
-    for p in model.parameters():
-        p.requires_grad_(True)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    model.zero_grad(set_to_none=True)
+    for name, p in named.items():
+        p.requires_grad_(trainable_names is None or name in trainable_names)
+    opt = torch.optim.AdamW([p for p in named.values() if p.requires_grad], lr=lr)
     dev = next(model.parameters()).device
     for step in range(1, steps + 1):
         prompt, completion = rng.choice(pairs)
