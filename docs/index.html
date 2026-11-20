@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Intervention Ladder: when is an AI fix safe?</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F2F4F1; --panel:#FFFFFF; --ink:#18212B; --muted:#56616D; --rule:#D3D9D4;
+  --safe:#1C7A55; --safe-soft:#DDEFE6; --harm:#B4233C; --harm-soft:#F6DDE2;
+  --cursor:#2B4DD8; --cursor-soft:#E1E7FB; --skip:#8F99A4; --code:#E8ECE9;
+  color-scheme: light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#121920; --panel:#1A232B; --ink:#E7ECEF; --muted:#9CA8B4; --rule:#2B3640;
+    --safe:#4CC38A; --safe-soft:#173329; --harm:#F27D90; --harm-soft:#3A1E25;
+    --cursor:#8EA6FF; --cursor-soft:#1F2850; --skip:#6E7985; --code:#0E1418;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#121920; --panel:#1A232B; --ink:#E7ECEF; --muted:#9CA8B4; --rule:#2B3640;
+  --safe:#4CC38A; --safe-soft:#173329; --harm:#F27D90; --harm-soft:#3A1E25;
+  --cursor:#8EA6FF; --cursor-soft:#1F2850; --skip:#6E7985; --code:#0E1418;
+  color-scheme: dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:1.0625rem;line-height:1.6}
+h1,h2,h3{font-family:"Bricolage Grotesque","Atkinson Hyperlegible",system-ui,sans-serif;line-height:1.1;margin:0}
+h1{font-size:clamp(2.1rem,5.5vw,3.6rem);font-weight:800;letter-spacing:-0.02em;max-width:18ch}
+h2{font-size:clamp(1.6rem,3.4vw,2.3rem);font-weight:700;letter-spacing:-0.01em;max-width:24ch}
+h3{font-size:1.2rem;font-weight:700}
+p{margin:0 0 1em;max-width:66ch}
+a{color:var(--cursor)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 clamp(18px,4vw,40px)}
+section{padding:clamp(56px,9vw,96px) 0;border-top:1px solid var(--rule)}
+section:first-of-type{border-top:0}
+.lede{font-size:1.2rem;color:var(--muted);max-width:56ch;margin-top:18px}
+button{font:inherit;cursor:pointer}
+:focus-visible{outline:3px solid var(--cursor);outline-offset:2px;border-radius:4px}
+.btn{border:2px solid var(--ink);background:var(--ink);color:var(--paper);padding:10px 18px;border-radius:999px;font-weight:700}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btnrow{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+
+/* hero meters */
+.meters{display:grid;gap:22px;margin-top:42px;max-width:760px}
+.meter .row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap}
+.meter .big{font-family:"Bricolage Grotesque",sans-serif;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800}
+.track{position:relative;height:22px;background:var(--rule);border-radius:6px;margin-top:8px;overflow:visible}
+.fill{position:absolute;inset:0 auto 0 0;border-radius:6px}
+.fill.safe{background:var(--safe)} .fill.harm{background:var(--harm)}
+.limit{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--ink)}
+.limit span{position:absolute;top:-24px;left:4px;font-size:.8rem;white-space:nowrap;color:var(--muted)}
+.verdict{margin-top:30px;padding:16px 20px;border-left:5px solid var(--harm);background:var(--panel);max-width:760px}
+
+/* steps of the method */
+.method{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:28px;margin-top:34px;counter-reset:m}
+.method li{list-style:none;counter-increment:m;padding-top:8px;border-top:3px solid var(--ink)}
+.method li::before{content:counter(m);font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:1.8rem;display:block}
+.method ol{padding:0;margin:0}
+
+/* trace */
+.trace{margin-top:30px;display:grid;gap:10px}
+.step{display:grid;grid-template-columns:44px 1fr auto;gap:14px;align-items:start;background:var(--panel);
+  border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.step .n{font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:1.4rem;color:var(--muted)}
+.step .what{font-weight:700}
+.step .why{color:var(--muted);font-size:.97rem}
+.tag{font-size:.85rem;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap}
+.tag.fail{background:var(--harm-soft);color:var(--harm)}
+.tag.none{background:var(--rule);color:var(--ink)}
+.tag.pass{background:var(--safe-soft);color:var(--safe)}
+.tag.skip{border:1px dashed var(--skip);color:var(--muted)}
+.res{font-size:.95rem;margin-top:4px}
+.note{font-size:.95rem;color:var(--muted);padding:10px 16px;border-left:3px solid var(--rule)}
+.stop{background:var(--ink);color:var(--paper);border-radius:10px;padding:16px 18px}
+.stop strong{display:block;font-family:"Bricolage Grotesque",sans-serif;font-size:1.2rem}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-top:30px}
+.summary div{border-top:3px solid var(--ink);padding-top:8px}
+.summary b{display:block;font-family:"Bricolage Grotesque",sans-serif;font-size:1.9rem}
+.tablewrap{overflow-x:auto;margin-top:22px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:.95rem}
+th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--rule)}
+th{font-weight:700;color:var(--muted)}
+td.num{font-variant-numeric:tabular-nums}
+tr.skipped td:first-child::after{content:" (skipped)";color:var(--muted);font-size:.85rem}
+.bad{color:var(--harm);font-weight:700} .ok{color:var(--safe);font-weight:700}
+
+/* sham */
+.sham{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:28px;margin-top:28px}
+.bar{display:flex;align-items:center;gap:12px;margin:8px 0}
+.bar .lbl{width:150px;flex:none;font-size:.95rem}
+.bar .t{flex:1;height:16px;background:var(--rule);border-radius:4px;position:relative}
+.bar .f{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--ink)}
+.bar .v{width:48px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+
+/* simulator */
+.presets{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+.preset{border:2px solid var(--rule);background:var(--panel);color:var(--ink);padding:10px 16px;border-radius:10px;font-weight:700;text-align:left}
+.preset[aria-pressed="true"]{border-color:var(--cursor);background:var(--cursor-soft)}
+.sim{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:28px;margin-top:26px;align-items:start}
+@media (max-width:820px){.sim{grid-template-columns:1fr}}
+.ladder{display:grid;gap:14px}
+.rung{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:10px 12px}
+.rung h4{margin:0 0 6px;font-size:.92rem;color:var(--muted);font-weight:700;display:flex;justify-content:space-between}
+.cand{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:center;padding:6px 6px;border-radius:8px;font-size:.95rem}
+.cand .mark{font-family:"Bricolage Grotesque",sans-serif;font-weight:800;color:var(--muted);text-align:center}
+.cand.current{background:var(--cursor-soft);outline:2px solid var(--cursor)}
+.cand.tried .mark{color:var(--ink)}
+.cand.skipped{color:var(--skip)}
+.cand.skipped .name{text-decoration:line-through;text-decoration-color:var(--skip)}
+.cand.accepted{background:var(--safe-soft)}
+.chip{border:1px solid var(--rule);background:transparent;color:var(--ink);border-radius:999px;padding:3px 10px;font-size:.82rem;white-space:nowrap}
+.chip.safe{color:var(--safe);border-color:var(--safe)} .chip.harmy{color:var(--harm);border-color:var(--harm)}
+.chip:disabled{cursor:default}
+.side{position:sticky;top:calc(16px + env(safe-area-inset-top,0px))}
+.narr{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:18px;min-height:150px}
+.narr .head{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:1.15rem;margin-bottom:6px}
+.compare{margin-top:18px;display:grid;gap:10px}
+.final{margin-top:14px;padding:14px 16px;border-radius:10px;font-weight:700;display:none}
+.final.show{display:block}
+.final.accept{background:var(--safe-soft);color:var(--safe)} .final.abstain{background:var(--harm-soft);color:var(--harm)}
+.edittoggle{margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.small{font-size:.9rem;color:var(--muted)}
+
+/* code */
+pre{background:var(--code);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;overflow-x:auto;margin:0;font-size:.9rem;line-height:1.5}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.codeblock{position:relative;margin:14px 0 26px;max-width:760px}
+.copy{position:absolute;top:8px;right:8px;border:1px solid var(--rule);background:var(--panel);color:var(--ink);border-radius:6px;padding:4px 10px;font-size:.85rem}
+ul.plain{max-width:66ch;padding-left:1.2em}
+ul.plain li{margin-bottom:.5em}
+footer{padding:40px 0 60px;border-top:1px solid var(--rule);color:var(--muted);font-size:.95rem}
+@media (prefers-reduced-motion: no-preference){
+  .fill.grow{animation:grow 1.1s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes grow{from{width:0}}
+}
+</style>
+</head>
+<body>
+<main>
+<section class="hero">
+  <div class="wrap">
+    <h1>A fix can get the answer right and still be the wrong fix.</h1>
+    <p class="lede">We taught a real AI model (Qwen2.5, 0.5B) one wrong fact, then tried 19 ways to repair it. The closest one fixed the wrong answer every time. It also changed answers the model used to get right.</p>
+    <div class="meters" aria-label="The closest repair on the real test case">
+      <div class="meter">
+        <div class="row"><span>Questions about the wrong fact, now answered correctly</span><span class="big">20 of 20</span></div>
+        <div class="track"><div class="fill safe grow" style="width:100%"></div></div>
+      </div>
+      <div class="meter">
+        <div class="row"><span>Answers it used to get right, now changed</span><span class="big">7 of 37</span></div>
+        <div class="track"><div class="fill harm grow" style="width:18.92%"></div><div class="limit" style="left:5%"><span>allowed: 5%</span></div></div>
+      </div>
+    </div>
+    <div class="verdict"><strong>So the tool declined it.</strong> Fixing one answer by breaking 19% of the others isn’t a repair. Below, you can watch every step of that decision, then try the decision rules yourself.</div>
+    <div class="btnrow">
+      <a class="btn" href="#steps" style="text-decoration:none">Watch the 10 steps</a>
+      <a class="btn ghost" href="#simulator" style="text-decoration:none">Try the simulator</a>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What this project tests</h2>
+    <p class="lede">Not how to train an AI, but how to tell whether a fix to one is safe before you apply it.</p>
+    <ol class="method">
+      <li><h3>Plant one wrong fact</h3><p>Teach the model that a made-up company was founded in the wrong city.</p></li>
+      <li><h3>Prove it’s real</h3><p>Train a matched copy without the wrong fact. If that copy also gives the wrong city, the fault isn’t real.</p></li>
+      <li><h3>Try repairs, cheapest first</h3><p>From a note in the prompt, up to retraining parts of the model.</p></li>
+      <li><h3>Accept or decline</h3><p>Keep the cheapest repair that fixes the fact and leaves other answers alone. If none does, leave the model alone.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section id="steps">
+  <div class="wrap">
+    <h2>The real run, step by step</h2>
+    <p class="lede">Test case “seed 401” passed every check we ran for a clean, real fault. This is exactly what the selector tried, in order.</p>
+    <p class="small">A repair passes only if it answers at least 18 of 20 target questions correctly, changes no more than 5% of the answers the model already got right, and stays within limits on unrelated text and arithmetic.</p>
+    <div class="trace" id="trace" aria-live="polite"></div>
+    <div class="btnrow">
+      <button class="btn" id="nextStep">Next step</button>
+      <button class="btn ghost" id="allSteps">Show all</button>
+    </div>
+    <div id="afterTrace" hidden>
+      <div class="summary">
+        <div><b>10 of 19</b>repairs tried</div>
+        <div><b>37%</b>of the work of trying everything (2,680 of 7,148 model runs)</div>
+        <div><b>Same answer</b>as trying all 19: leave the model alone</div>
+      </div>
+      <h3 style="margin-top:40px">It skipped 9 repairs. Were any of them safe?</h3>
+      <p>We ran all 19 anyway to check. None passed. The larger attention adapter came closest.</p>
+      <button class="btn ghost" id="showTable">Show all 19 results</button>
+      <div class="tablewrap" id="sweep" hidden></div>
+      <p class="small" style="margin-top:14px">On a separate set of new questions, the closest adapter changed 3 of 56 known answers (5.4%). That only passes under a pre-set 7% tolerance, so it was marked borderline, and it had already failed the main check.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>The check that caught our own mistake</h2>
+    <p class="lede">Before this result, the control copy exposed a false success. On an early test, the model gave the planted wrong city even when it was never taught it, because that city appeared elsewhere in its training facts.</p>
+    <div class="sham">
+      <div>
+        <h3>Before the fix (seed 203)</h3>
+        <div class="bar"><span class="lbl">Taught the wrong fact</span><span class="t"><span class="f" style="width:100%"></span></span><span class="v">100%</span></div>
+        <div class="bar"><span class="lbl">Never taught it</span><span class="t"><span class="f" style="width:100%"></span></span><span class="v">100%</span></div>
+        <p class="small">Share of questions answered with the planted wrong city. Same answer either way: the “fault” wasn’t caused by teaching it.</p>
+      </div>
+      <div>
+        <h3>After the fix (15 runs)</h3>
+        <div class="bar"><span class="lbl">Taught the wrong fact</span><span class="t"><span class="f" style="width:60%"></span></span><span class="v">9/15</span></div>
+        <div class="bar"><span class="lbl">Never taught it</span><span class="t"><span class="f" style="width:0%"></span></span><span class="v">0/15</span></div>
+        <p class="small">Runs where the copy gave the wrong city on at least 90% of questions. With that city removed from everything else, the untaught copy never gave it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="simulator">
+  <div class="wrap">
+    <h2>Try the decision rules yourself</h2>
+    <p class="lede">Pick a situation and watch what the selector tries, what it skips, and what it decides. These are the same rules used on the real run, checked to make identical decisions across 405 test cases.</p>
+    <div class="presets" role="group" aria-label="Choose a situation">
+      <button class="preset" data-preset="prompt" aria-pressed="false">A cheap fix works</button>
+      <button class="preset" data-preset="adapter" aria-pressed="false">A fix changes other answers</button>
+      <button class="preset" data-preset="seed401" aria-pressed="false">No tested fix passes</button>
+    </div>
+    <div class="sim">
+      <div class="ladder" id="ladder"></div>
+      <div class="side">
+        <div class="narr" aria-live="polite">
+          <div class="head" id="narrHead">Pick a situation to start</div>
+          <div id="narrBody" class="small">Each row is one repair. They’re grouped from cheapest at the top to most invasive at the bottom.</div>
+        </div>
+        <div class="btnrow" style="margin-top:14px">
+          <button class="btn" id="simRun" disabled>Run</button>
+          <button class="btn ghost" id="simStep" disabled>Step</button>
+          <button class="btn ghost" id="simReset" disabled>Reset</button>
+        </div>
+        <div class="final" id="final"></div>
+        <div class="compare" id="compare" hidden>
+          <div class="bar"><span class="lbl">Selector</span><span class="t"><span class="f" id="cmpSel"></span></span><span class="v" id="cmpSelV"></span></div>
+          <div class="bar"><span class="lbl">Try all 19</span><span class="t"><span class="f" style="width:100%"></span></span><span class="v">100%</span></div>
+          <p class="small" id="cmpNote"></p>
+        </div>
+        <div class="edittoggle">
+          <button class="btn ghost" id="editToggle" aria-pressed="false" disabled>Edit outcomes</button>
+          <span class="small" id="editHint">After an example, click any outcome to change what that repair does.</span>
+        </div>
+      </div>
+    </div>
+    <p class="small" style="margin-top:22px">Simulator costs are illustrative per-level averages, chosen so the two real runs reproduce their actual totals.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Run it yourself</h2>
+    <p class="lede">The code, tests, and notebooks are open source. The tests run on any laptop. Planting and repairing a real model needs a GPU, and a free Colab one works.</p>
+    <h3>Check the code on your machine</h3>
+    <div class="codeblock"><button class="copy" data-copy="c1">Copy</button><pre><code id="c1">git clone https://github.com/AjayKasu1/intervention-ladder.git
+cd intervention-ladder
+pip install -r requirements.txt
+pytest -q</code></pre></div>
+    <h3>Reproduce the real pilot on a free GPU</h3>
+    <p>Open the pinned notebook in Colab, choose a GPU runtime, and run all cells.</p>
+    <p><a href="https://colab.research.google.com/github/AjayKasu1/intervention-ladder/blob/main/notebooks/qwen_pilot_v08_colab.ipynb">Open the v0.8 pilot notebook in Colab</a></p>
+    <h3>Replay the selector on a results table</h3>
+    <div class="codeblock"><button class="copy" data-copy="c2">Copy</button><pre><code id="c2">python scripts/run_selector.py --file results/&lt;case&gt;/exhaustive.json --no-cap</code></pre></div>
+    <p class="small">Coming later: a test script for checking a prompt fix on your own chatbot, for example making sure a new return policy doesn’t change its shipping or warranty answers. It will show each answer next to its score, because simple phrase matching can be fooled.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What this doesn’t show yet</h2>
+    <ul class="plain">
+      <li>One clean test case. That shows the system works, not that the selector is reliably efficient.</li>
+      <li>The selector has never accepted a repair on a real model, because no repair was safe.</li>
+      <li>One small model and one kind of fault: a single wrong fact about a made-up company.</li>
+      <li>The checks sample the model’s behavior. Passing them isn’t proof that nothing else changed.</li>
+    </ul>
+  </div>
+</section>
+</main>
+<footer>
+  <div class="wrap">
+    <p>Built by Ajay Kasu. <a href="https://github.com/AjayKasu1/intervention-ladder">Source code on GitHub</a>. <a href="https://github.com/AjayKasu1/intervention-ladder/blob/main/docs/FINDINGS.md">Full findings</a>.</p>
+  </div>
+</footer>
+<script>
+// Faithful JS port of repairbench/selector.py (LadderSelector) for the sandbox.
+const LEVEL_COST = [40, 40, 40, 172, 624, 1001]; // illustrative; reproduces the real seed 303 and 401 totals
+const CANDS = [
+  {id:"noop", level:0, kind:"noop", name:"Do nothing"},
+  {id:"ctx_short", level:1, kind:"context", name:"Short fact in the prompt"},
+  {id:"ctx_instruct", level:1, kind:"context", name:"Instruction in the prompt"},
+  {id:"ctx_verbose", level:1, kind:"context", name:"Detailed note in the prompt"},
+  {id:"mem_exact", level:2, kind:"scoped_memory", name:"Note, triggered by exact name"},
+  {id:"mem_fuzzy", level:2, kind:"scoped_memory", name:"Note, triggered by similar name"},
+  {id:"steer_l25_a2", level:3, kind:"steering", site:"0.25", frac:0.25, strength:2, name:"Gentle nudge, early layer"},
+  {id:"steer_l25_a4", level:3, kind:"steering", site:"0.25", frac:0.25, strength:4, name:"Strong nudge, early layer"},
+  {id:"steer_l50_a2", level:3, kind:"steering", site:"0.5", frac:0.5, strength:2, name:"Gentle nudge, middle layer"},
+  {id:"steer_l50_a4", level:3, kind:"steering", site:"0.5", frac:0.5, strength:4, name:"Strong nudge, middle layer"},
+  {id:"steer_l75_a2", level:3, kind:"steering", site:"0.75", frac:0.75, strength:2, name:"Gentle nudge, late layer"},
+  {id:"steer_l75_a4", level:3, kind:"steering", site:"0.75", frac:0.75, strength:4, name:"Strong nudge, late layer"},
+  {id:"edit_l25_r1", level:4, kind:"low_rank_edit", site:"0.25", frac:0.25, strength:1, name:"Tiny weight edit, early layer"},
+  {id:"edit_l50_r1", level:4, kind:"low_rank_edit", site:"0.5", frac:0.5, strength:1, name:"Tiny weight edit, middle layer"},
+  {id:"edit_l75_r1", level:4, kind:"low_rank_edit", site:"0.75", frac:0.75, strength:1, name:"Tiny weight edit, late layer"},
+  {id:"lora_attn_r4", level:5, kind:"adapter", site:"attn", strength:4, name:"Small adapter, attention"},
+  {id:"lora_attn_r8", level:5, kind:"adapter", site:"attn", strength:8, name:"Larger adapter, attention"},
+  {id:"lora_mlp_r4", level:5, kind:"adapter", site:"mlp", strength:4, name:"Small adapter, memory layers"},
+  {id:"lora_mlp_r8", level:5, kind:"adapter", site:"mlp", strength:8, name:"Larger adapter, memory layers"},
+];
+const OUT = {
+  none:{label:"No effect", signal:0, damage:0},
+  partial:{label:"Helps a little", signal:0.5, damage:0.5},
+  safe:{label:"Fixes it safely", signal:1, damage:0.4},
+  mild:{label:"Fixes it, changes a few other answers", signal:1, damage:1.5},
+  heavy:{label:"Fixes it, changes many other answers", signal:1, damage:30},
+  harm:{label:"Barely helps, causes damage", signal:0.25, damage:2.2},
+  break:{label:"No fix, changes other answers", signal:0, damage:5},
+};
+const ORDER = ["none","partial","safe","mild","heavy","harm","break"];
+const LOW = 0.2, HEAVY = 2.0;
+const passes = o => o.signal >= 0.9 && o.damage <= 1;
+const costOf = c => LEVEL_COST[c.level];
+
+function runSelector(outcomes){
+  const trace = [], skipped = [];
+  let spent = 0;
+  const byId = Object.fromEntries(CANDS.map(c => [c.id, c]));
+  class Stop { constructor(reason, selected=null){ this.reason = reason; this.selected = selected; } }
+  const tryC = (id, why) => {
+    const o = OUT[outcomes[id]];
+    spent += costOf(byId[id]);
+    const ok = passes(o);
+    trace.push({id, why, key: outcomes[id], passes: ok});
+    if (ok) throw new Stop("This is the first repair that passed every safety check, at the cheapest level that works.", id);
+    return o;
+  };
+  const classify = seen => {
+    const worst = Math.max(...seen.map(o => o.damage));
+    const rd = seen.filter(o => o.signal >= 0.9 && o.damage > 1);
+    if (rd.length) return ["repaired_damaged", Math.min(...rd.map(o => o.damage))];
+    if (worst > 1) return ["damaged", worst];
+    if (Math.max(...seen.map(o => o.signal)) < LOW) return ["dead", worst];
+    return ["partial", worst];
+  };
+  const exploreSites = cands => {
+    const sites = new Map();
+    for (const c of cands){ if (!sites.has(c.site)) sites.set(c.site, []); sites.get(c.site).push(c); }
+    let keys = [...sites.keys()];
+    if (cands[0].frac !== undefined){ // numeric layer sites: middle first
+      const fr = keys.map(Number), mid = (Math.min(...fr) + Math.max(...fr)) / 2;
+      keys.sort((a, b) => (Math.abs(a - mid) - Math.abs(b - mid)) || (a - b));
+    }
+    const outcomesBySite = []; let probeTop = false;
+    for (const k of keys){
+      const ladder = sites.get(k).slice().sort((a, b) => a.strength - b.strength);
+      const seen = [];
+      if (probeTop && ladder.length > 1){
+        const top = tryC(ladder[ladder.length-1].id, "An earlier spot did nothing even at full strength, so test this spot at full strength first.");
+        seen.push(top);
+        if (top.damage > 1){
+          for (const c of ladder.slice(0, -1).reverse()){
+            const o = tryC(c.id, "Full strength caused damage here, so try a gentler version.");
+            seen.push(o);
+            if (o.damage <= 1) break;
+          }
+        }
+      } else {
+        for (const c of ladder){
+          const o = tryC(c.id, seen.length === 0 ? "Start with the gentlest version at this spot." : "No damage yet, so try a stronger version.");
+          seen.push(o);
+          if (o.damage > 1) break;
+        }
+      }
+      const cl = classify(seen); outcomesBySite.push(cl);
+      if (cl[0] === "dead") probeTop = true;
+    }
+    return outcomesBySite;
+  };
+  let decision;
+  try {
+    let contextBest = 0;
+    for (let level = 0; level <= 5; level++){
+      const cands = CANDS.filter(c => c.level === level);
+      const kind = cands[0].kind;
+      if (kind === "noop"){
+        tryC("noop", "First check: is anything actually wrong?");
+      } else if (kind === "context"){
+        const order = [cands[0], cands[cands.length-1], ...cands.slice(1, -1)];
+        let blind = 0;
+        for (const c of order){
+          if (contextBest < LOW && blind >= 2){
+            order.slice(order.indexOf(c)).forEach(x => skipped.push({id:x.id, why:"Two different prompts had no effect, so the model is ignoring prompt fixes."}));
+            break;
+          }
+          const o = tryC(c.id, blind === 0 ? "Cheapest fix: tell the model the right answer in the prompt." : "Try different wording, in case the first was ignored.");
+          contextBest = Math.max(contextBest, o.signal); blind++;
+        }
+      } else if (kind === "scoped_memory"){
+        if (contextBest < LOW){
+          cands.forEach(c => skipped.push({id:c.id, why:"Skipped: this is the same prompt note behind a trigger, and the prompt didn't work."}));
+          continue;
+        }
+        for (const c of cands) tryC(c.id, "The prompt helped, and a trigger may stop it affecting other questions.");
+      } else {
+        const res = exploreSites(cands);
+        if ((kind === "low_rank_edit" || kind === "adapter") && res.length &&
+            res.every(([s, d]) => s === "repaired_damaged" && d >= HEAVY)){
+          CANDS.filter(c => c.level > level).forEach(c => skipped.push({id:c.id, why:"Skipped: weight edits already fixed the answer only by causing heavy damage."}));
+          throw new Stop("Every weight edit fixed the answer but caused heavy damage, so stronger, riskier fixes aren't tried.");
+        }
+      }
+    }
+    throw new Stop("No repair passed every safety check, so the safest choice is to leave the model alone.");
+  } catch (e){
+    if (!(e instanceof Stop)) throw e;
+    decision = {decision: e.selected ? "accept" : "abstain", selected: e.selected, reason: e.reason};
+  }
+  const tried = new Set(trace.map(t => t.id));
+  const allSkipped = CANDS.filter(c => !tried.has(c.id)).map(c => {
+    const s = skipped.find(x => x.id === c.id);
+    return {id: c.id, why: s ? s.why : (decision.decision === "accept" ? "Not needed: a cheaper repair already passed." : "Not reached.")};
+  });
+  return {...decision, trace, spent, skipped: allSkipped};
+}
+
+function runExhaustive(outcomes){
+  const spent = CANDS.reduce((s, c) => s + costOf(c), 0);
+  const ok = CANDS.filter(c => passes(OUT[outcomes[c.id]]));
+  ok.sort((a, b) => a.level - b.level);
+  return {decision: ok.length ? "accept" : "abstain", selected: ok.length ? ok[0].id : null, spent, tried: CANDS.length};
+}
+
+const PRESETS = {
+  seed401: Object.fromEntries(CANDS.map(c => [c.id,
+    c.level === 1 ? "break" : c.level === 4 ? "heavy" : c.id === "lora_attn_r4" ? "harm" : c.level === 5 ? "mild" : "none"])),
+  seed303: Object.fromEntries(CANDS.map(c => [c.id,
+    c.id === "steer_l75_a4" ? "harm" : (c.level >= 4 ? "heavy" : "none")])),
+  prompt: Object.fromEntries(CANDS.map(c => [c.id,
+    c.level === 0 ? "none" : c.level <= 2 ? "safe" : c.level === 3 ? "partial" : c.level === 4 ? "mild" : "safe"])),
+  adapter: Object.fromEntries(CANDS.map(c => [c.id,
+    c.level === 4 ? "mild" : c.id === "lora_attn_r8" ? "safe" : c.id === "lora_attn_r4" ? "partial" : "none"])),
+  clean: Object.fromEntries(CANDS.map(c => [c.id, "safe"])),
+};
+
+const NAME = Object.fromEntries(CANDS.map(c => [c.id, c.name]));
+const TRACE401 = [
+  {id:"noop", why:"First check: is anything actually wrong?", res:"Wrong on all 20 target questions. A repair is needed.", tag:["none","Fault confirmed"]},
+  {id:"ctx_short", why:"Cheapest fix: tell the model the right answer in the prompt.", res:"0 of 20 fixed. Changed 10 of 37 answers it used to get right.", tag:["fail","Fails"]},
+  {id:"ctx_verbose", why:"Try different wording, in case the first prompt was ignored.", res:"0 of 20 fixed. Changed 9 of 37.", tag:["fail","Fails"],
+   after:"Two different prompts had no effect, so the selector skips the third prompt and both triggered notes. They use the same text, so they can’t do better."},
+  {id:"steer_l50_a2", why:"Start gentle, in the middle of the model.", res:"0 of 20 fixed. No other answers changed.", tag:["none","No effect"]},
+  {id:"steer_l50_a4", why:"No damage yet, so try a stronger nudge.", res:"0 of 20 fixed. No other answers changed.", tag:["none","No effect"]},
+  {id:"steer_l25_a4", why:"The middle did nothing even at full strength, so test the early layer at full strength.", res:"0 of 20 fixed.", tag:["none","No effect"]},
+  {id:"steer_l75_a4", why:"Same quick test for the late layer.", res:"0 of 20 fixed.", tag:["none","No effect"],
+   after:"Nudges did nothing anywhere, so the gentler versions are skipped. Next level up: editing the model’s weights."},
+  {id:"edit_l50_r1", why:"Smallest weight edit, starting in the middle.", res:"19 of 20 fixed, but changed all 37 answers it used to get right.", tag:["fail","Fails"]},
+  {id:"edit_l25_r1", why:"Same edit at the early layer.", res:"20 of 20 fixed. Changed all 37.", tag:["fail","Fails"]},
+  {id:"edit_l75_r1", why:"Same edit at the late layer.", res:"20 of 20 fixed. Changed all 37.", tag:["fail","Fails"]},
+];
+const STOP401 = "Every weight edit fixed the answer only by changing every other answer. Bigger fixes have even more freedom to cause damage, so the selector stops and declines.";
+const SWEEP401 = [
+  ["noop",0,0],["ctx_short",0,10],["ctx_instruct",0,11],["ctx_verbose",0,9],["mem_exact",0,0],["mem_fuzzy",0,0],
+  ["steer_l25_a2",0,0],["steer_l25_a4",0,0],["steer_l50_a2",0,0],["steer_l50_a4",0,0],["steer_l75_a2",0,0],["steer_l75_a4",0,0],
+  ["edit_l25_r1",20,37],["edit_l50_r1",19,37],["edit_l75_r1",20,37],
+  ["lora_attn_r4",1,3],["lora_attn_r8",20,7],["lora_mlp_r4",20,6],["lora_mlp_r8",20,9],
+];
+
+/* ---------- real trace ---------- */
+const traceEl = document.getElementById("trace");
+let traceShown = 0;
+function renderStep(i){
+  const s = TRACE401[i];
+  const div = document.createElement("div");
+  div.className = "step";
+  div.innerHTML = `<span class="n">${i+1}</span><div><div class="what">${NAME[s.id]}</div><div class="why">${s.why}</div><div class="res">${s.res}</div></div><span class="tag ${s.tag[0]}">${s.tag[1]}</span>`;
+  traceEl.appendChild(div);
+  if (s.after){ const n = document.createElement("div"); n.className = "note"; n.textContent = s.after; traceEl.appendChild(n); }
+}
+function finishTrace(){
+  const d = document.createElement("div");
+  d.className = "stop";
+  d.innerHTML = `<strong>Decision: leave the model alone.</strong>${STOP401}`;
+  traceEl.appendChild(d);
+  document.getElementById("nextStep").disabled = true;
+  document.getElementById("allSteps").disabled = true;
+  document.getElementById("afterTrace").hidden = false;
+}
+document.getElementById("nextStep").addEventListener("click", () => {
+  if (traceShown < TRACE401.length){ renderStep(traceShown++); }
+  if (traceShown === TRACE401.length) finishTrace();
+});
+document.getElementById("allSteps").addEventListener("click", () => {
+  while (traceShown < TRACE401.length) renderStep(traceShown++);
+  finishTrace();
+});
+document.getElementById("showTable").addEventListener("click", (e) => {
+  const tried = new Set(TRACE401.map(s => s.id));
+  const rows = SWEEP401.map(([id, fixed, changed]) => {
+    const pass = fixed >= 18 && changed / 37 <= 0.05;
+    return `<tr class="${tried.has(id) ? "" : "skipped"}"><td>${NAME[id]}</td><td class="num">${fixed} of 20</td><td class="num ${changed/37 > 0.05 ? "bad" : ""}">${changed} of 37 (${Math.round(changed/37*100)}%)</td><td class="${pass ? "ok" : "bad"}">${pass ? "Passes" : "Fails"}</td></tr>`;
+  }).join("");
+  const box = document.getElementById("sweep");
+  box.innerHTML = `<table><thead><tr><th scope="col">Repair</th><th scope="col">Target questions fixed</th><th scope="col">Known answers changed</th><th scope="col">Result</th></tr></thead><tbody>${rows}</tbody></table>`;
+  box.hidden = false;
+  e.target.disabled = true;
+});
+
+/* ---------- simulator ---------- */
+const LEVELS = ["Check first","Tell it in the prompt","Prompt note, only when the company is mentioned",
+  "Nudge its internal signals","Edit one weight matrix","Train a small add-on (adapter)"];
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let outcomes = null, result = null, shown = 0, timer = null, editing = false;
+const $ = id => document.getElementById(id);
+const harmy = k => ["mild","heavy","harm","break"].includes(k);
+
+function renderLadder(){
+  const lad = $("ladder");
+  lad.innerHTML = "";
+  for (let lv = 0; lv <= 5; lv++){
+    const r = document.createElement("div");
+    r.className = "rung";
+    r.innerHTML = `<h4><span>${LEVELS[lv]}</span><span>${lv === 0 ? "cheapest" : lv === 5 ? "most invasive" : ""}</span></h4>`;
+    CANDS.filter(c => c.level === lv).forEach(c => {
+      const row = document.createElement("div");
+      row.className = "cand"; row.id = "c_" + c.id;
+      const k = outcomes ? outcomes[c.id] : null;
+      row.innerHTML = `<span class="mark"></span><span class="name">${c.name}</span>`;
+      const chip = document.createElement("button");
+      chip.className = "chip" + (k === "safe" ? " safe" : harmy(k) ? " harmy" : "");
+      chip.textContent = k ? OUT[k].label : "Not set";
+      chip.disabled = !editing;
+      chip.setAttribute("aria-label", `${c.name}: ${k ? OUT[k].label : "not set"}${editing ? ". Click to change." : ""}`);
+      chip.addEventListener("click", () => {
+        if (!editing) return;
+        outcomes[c.id] = ORDER[(ORDER.indexOf(outcomes[c.id]) + 1) % ORDER.length];
+        document.querySelectorAll(".preset").forEach(b => b.setAttribute("aria-pressed", "false"));
+        resetRun(); renderLadder();
+        $("narrHead").textContent = "Your own situation";
+        $("narrBody").textContent = "Outcome changed. Press Run or Step to see what the selector does now.";
+        document.getElementById("c_" + c.id).querySelector(".chip").focus();
+      });
+      row.appendChild(chip);
+      r.appendChild(row);
+    });
+    lad.appendChild(r);
+  }
+}
+function resetRun(){
+  clearInterval(timer); timer = null;
+  result = outcomes ? runSelector(outcomes) : null;
+  shown = 0;
+  $("final").className = "final"; $("final").textContent = "";
+  $("compare").hidden = true;
+  ["simRun","simStep","simReset"].forEach(id => $(id).disabled = !outcomes);
+}
+function paint(){
+  document.querySelectorAll(".cand").forEach(el => { el.classList.remove("current","tried","skipped","accepted"); el.querySelector(".mark").textContent = ""; });
+  result.trace.slice(0, shown).forEach((t, i) => {
+    const el = $("c_" + t.id); el.classList.add("tried"); el.querySelector(".mark").textContent = i + 1;
+    if (i === shown - 1) el.classList.add("current");
+  });
+  const done = shown >= result.trace.length;
+  if (done){
+    result.skipped.forEach(s => { const el = $("c_" + s.id); el.classList.add("skipped"); el.querySelector(".mark").textContent = "×"; });
+    if (result.selected){ const el = $("c_" + result.selected); el.classList.remove("current"); el.classList.add("accepted"); el.querySelector(".mark").textContent = "✓"; }
+  }
+}
+function narrate(){
+  if (shown === 0) return;
+  const t = result.trace[shown - 1];
+  const o = OUT[t.key];
+  $("narrHead").textContent = `Step ${shown}: ${NAME[t.id]}`;
+  $("narrBody").innerHTML = `${t.why}<br><br><strong>Result:</strong> ${o.label}. ${t.passes ? "Passes every check." : "Doesn’t pass."}`;
+  if (shown >= result.trace.length) showFinal();
+}
+function showFinal(){
+  const f = $("final");
+  f.className = "final show " + result.decision;
+  f.textContent = result.decision === "accept"
+    ? `Decision: use “${NAME[result.selected]}”. ${result.reason}`
+    : `Decision: leave the model alone. ${result.reason}`;
+  const total = CANDS.reduce((s, c) => s + LEVEL_COST[c.level], 0);
+  const pct = Math.round(result.spent / total * 100);
+  $("cmpSel").style.width = pct + "%";
+  $("cmpSelV").textContent = pct + "%";
+  const ex = runExhaustive(outcomes);
+  const same = ex.decision === result.decision && ex.selected === result.selected;
+  $("cmpNote").textContent = `The selector tried ${result.trace.length} of 19 repairs and skipped ${result.skipped.length}. ${same ? "Trying all 19 reaches the same decision." : "Trying all 19 would decide differently here, which is the cost of skipping."}`;
+  $("compare").hidden = false;
+  $("simRun").disabled = true; $("simStep").disabled = true;
+  $("editToggle").disabled = false;
+}
+function step(){
+  if (!result || shown >= result.trace.length) return;
+  shown++; paint(); narrate();
+  if (shown >= result.trace.length){ clearInterval(timer); timer = null; }
+}
+$("simStep").addEventListener("click", step);
+$("simRun").addEventListener("click", () => {
+  if (reduce){ while (shown < result.trace.length) step(); return; }
+  if (timer) return;
+  $("simRun").disabled = true;
+  timer = setInterval(step, 550);
+  step();
+});
+$("simReset").addEventListener("click", () => {
+  resetRun(); paint();
+  $("narrHead").textContent = "Ready";
+  $("narrBody").textContent = "Press Run to watch the whole climb, or Step to go one repair at a time.";
+});
+const PRESET_TEXT = {
+  prompt: ["A cheap fix works", "Telling the model the answer in its prompt fixes it safely. Watch how quickly the selector stops."],
+  adapter: ["A fix changes other answers", "Weight edits fix the answer but change a few other answers. The selector should keep looking for something safer."],
+  seed401: ["No tested fix passes", "This matches the real seed 401 run: prompts break other answers, nudges do nothing, and weight edits break everything."],
+};
+document.querySelectorAll(".preset").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".preset").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  outcomes = {...PRESETS[b.dataset.preset]};
+  resetRun(); renderLadder(); paint();
+  $("narrHead").textContent = PRESET_TEXT[b.dataset.preset][0];
+  $("narrBody").textContent = PRESET_TEXT[b.dataset.preset][1] + " Press Run, or Step to go one repair at a time.";
+}));
+$("editToggle").addEventListener("click", () => {
+  editing = !editing;
+  $("editToggle").setAttribute("aria-pressed", String(editing));
+  $("editToggle").textContent = editing ? "Done editing" : "Edit outcomes";
+  $("editHint").textContent = editing ? "Click any outcome to cycle through what that repair does." : "After an example, click any outcome to change what that repair does.";
+  renderLadder(); paint();
+  if (shown >= (result ? result.trace.length : 0) && result && shown > 0) showFinal();
+});
+renderLadder();
+
+/* ---------- copy buttons ---------- */
+document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", async () => {
+  const text = document.getElementById(b.dataset.copy).textContent;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const range = document.createRange(); range.selectNodeContents(document.getElementById(b.dataset.copy));
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    try { document.execCommand("copy"); } catch (_) {}
+  }
+  b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1500);
+}));
+
+</script>
+</body>
+</html>
