@@ -4,6 +4,9 @@ Can an agent pick the least costly intervention that fixes a specific model
 failure while preserving unrelated behavior, and abstain when no tested
 intervention meets the thresholds within budget?
 
+[Open the interactive demo](https://ajaykasu1.github.io/intervention-ladder/) to
+step through the real Qwen result and try the selector on simulated repairs.
+
 This repo is the pilot harness: one model family slot, one failure family
 (`missing_fact`), a frozen 19-candidate intervention set, and the full
 evaluation pipeline. See the [spec](docs/SPEC_missing_fact.md) and the
